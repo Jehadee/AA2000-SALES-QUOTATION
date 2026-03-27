@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X } from 'lucide-react';
+import { LayoutDashboard, History, Settings, LogOut, UserCircle2, Plus, FileText, Send, Paperclip, ChevronRight, Search, Filter, Trash2 } from 'lucide-react';
 import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile } from '../types';
 import { PRODUCTS, COMPANY_DETAILS, DEFAULT_PDF_TEMPLATE, INITIAL_CUSTOMER } from '../constants';
 import { processConversation } from '../services/geminiService';
@@ -20,7 +20,6 @@ import { fetchProducts } from '../services/productsApi';
 import { deriveTierPricesFromBasePrice } from '../services/pricing';
 import * as XLSX from 'xlsx';
 import { fetchAllyOpportunities } from '../services/allyOpportunitiesApi';
-import { fetchEstimationFiles, type EstimationFileRecord } from '../services/estimationApi';
 
 interface DashboardProps {
   onLogout: () => void;
@@ -43,7 +42,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   const [discountType, setDiscountType] = useState<'percentage' | 'fixed'>('percentage');
   const [showVat, setShowVat] = useState<boolean>(true);
   const [currentStatus, setCurrentStatus] = useState<QuotationStatus>(QuotationStatus.INQUIRY);
-  const [activeTab, setActiveTab] = useState<'estimation' | 'quotation' | 'pipeline' | 'admin'>('estimation');
+  const [activeTab, setActiveTab] = useState<'quotation' | 'pipeline' | 'admin'>('quotation');
   
   const [messages, setMessages] = useState<Message[]>([
     { role: 'model', content: "Hello! I'm your AA2000 Sales Assistant. I can help you build quotations faster. Just tell me what products you need, or upload a photo of a hand-written BOM or an Excel file!" }
@@ -65,10 +64,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   
   const [pipelineSearch, setPipelineSearch] = useState('');
   const [pipelineStatusFilter, setPipelineStatusFilter] = useState<QuotationStatus | 'ALL'>('ALL');
-  const [estimationFiles, setEstimationFiles] = useState<EstimationFileRecord[]>([]);
-  const [isLoadingEstimations, setIsLoadingEstimations] = useState(false);
-  const [estimationError, setEstimationError] = useState<string | null>(null);
-  const [selectedEstimationFile, setSelectedEstimationFile] = useState<EstimationFileRecord | null>(null);
   
   const [isChatFloating, setIsChatFloating] = useState(false);
   const chatSensorRef = useRef<HTMLDivElement>(null);
@@ -208,32 +203,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     setAdminLogs(logs);
     await saveAdminLogs(logs);
   };
-
-  const loadEstimationInbox = useCallback(async () => {
-    setIsLoadingEstimations(true);
-    setEstimationError(null);
-    try {
-      const files = await fetchEstimationFiles();
-      setEstimationFiles(files);
-    } catch (e: any) {
-      setEstimationError(e?.message || 'Failed to load estimation files');
-    } finally {
-      setIsLoadingEstimations(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (activeTab !== 'estimation') return;
-    loadEstimationInbox();
-    const timer = window.setInterval(loadEstimationInbox, 12000);
-    return () => window.clearInterval(timer);
-  }, [activeTab, loadEstimationInbox]);
-
-  const handleCreateQuotationFromEstimation = useCallback((file: EstimationFileRecord) => {
-    setSelectedEstimationFile(file);
-    setActiveTab('quotation');
-    showToast(`Loaded ${file.filename}. You can draft while viewing the source file.`, 'info');
-  }, []);
 
   const getPriceForClient = useCallback((product: Product, clientType: ClientType, volume: number): number => {
     const tier = deriveTierPricesFromBasePrice(product.baseCost || 0);
@@ -830,19 +799,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
               <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Workspaces</p>
               <nav className="space-y-1">
                 <button
-                  onClick={() => setActiveTab('estimation')}
-                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'estimation' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
-                >
-                  <div className={`p-2 rounded-lg transition-colors ${activeTab === 'estimation' ? 'bg-amber-500/10 text-amber-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
-                    <FolderOpen size={18} />
-                  </div>
-                  <div className="text-left">
-                    <span className="block font-bold">Estimation Inbox</span>
-                    <span className="block text-[10px] opacity-60 font-normal mt-0.5">DRAFT FROM RECEIVED FILES</span>
-                  </div>
-                </button>
-
-                <button
                   onClick={() => setActiveTab('quotation')}
                   className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'quotation' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                 >
@@ -912,84 +868,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
 
       {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto relative scroll-smooth bg-[#F8F9FA]">
-        {activeTab === 'estimation' && (
-          <div className="p-8 max-w-7xl mx-auto min-h-full">
-            <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm min-h-[80vh]">
-              <div className="flex flex-col md:flex-row items-center justify-between gap-4 mb-8">
-                <div>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Workspace</p>
-                  <h2 className="text-2xl font-black text-slate-900">Estimation Inbox</h2>
-                </div>
-                <button
-                  onClick={loadEstimationInbox}
-                  disabled={isLoadingEstimations}
-                  className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-wider text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  <RefreshCw size={14} className={isLoadingEstimations ? 'animate-spin' : ''} />
-                  Refresh Files
-                </button>
-              </div>
-
-              {estimationError && (
-                <div className="mb-6 bg-red-50 border border-red-100 text-red-700 text-sm rounded-xl px-4 py-3">
-                  {estimationError}
-                </div>
-              )}
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-500 border-y border-slate-100">
-                    <tr>
-                      <th className="px-6 py-4 first:rounded-l-xl">File Name</th>
-                      <th className="px-6 py-4">Type</th>
-                      <th className="px-6 py-4">Preview</th>
-                      <th className="px-6 py-4 last:rounded-r-xl">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {!isLoadingEstimations && estimationFiles.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="text-center py-16 text-slate-400 text-sm font-medium">
-                          No estimation files found.
-                        </td>
-                      </tr>
-                    ) : (
-                      estimationFiles.map((f) => (
-                        <tr key={f.filename} className="hover:bg-slate-50 transition-colors">
-                          <td className="px-6 py-5">
-                            <div className="font-bold text-slate-900 text-sm">{f.filename}</div>
-                          </td>
-                          <td className="px-6 py-5 text-sm font-medium text-slate-600">
-                            {f.isPdf ? 'PDF' : f.isDocx ? 'DOCX' : (f.extension ? f.extension.toUpperCase() : 'FILE')}
-                          </td>
-                          <td className="px-6 py-5">
-                            <a
-                              href={f.fileUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex items-center text-xs font-bold text-indigo-600 hover:underline"
-                            >
-                              Open File
-                            </a>
-                          </td>
-                          <td className="px-6 py-5">
-                            <button
-                              onClick={() => handleCreateQuotationFromEstimation(f)}
-                              className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-[10px] font-bold uppercase tracking-wider hover:bg-indigo-500"
-                            >
-                              Create Quotation
-                            </button>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
         {activeTab === 'quotation' && (
           <div className="min-h-full flex flex-col">
             {/* Header */}
@@ -997,23 +875,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
               <div>
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-2">QUOTATION STUDIO</p>
                 <h1 className="text-3xl font-black text-slate-900 tracking-tight">Create & refine professional quotations</h1>
-                {selectedEstimationFile && (
-                  <p className="mt-2 text-xs font-bold text-amber-700 uppercase tracking-wider">
-                    Drafting from estimation file: {selectedEstimationFile.filename}
-                  </p>
-                )}
               </div>
               
               <div className="flex items-center gap-4">
-                {selectedEstimationFile && (
-                  <button
-                    onClick={() => setSelectedEstimationFile(null)}
-                    className="inline-flex items-center gap-2 bg-white px-4 py-3 rounded-2xl border border-slate-200 shadow-sm text-xs font-bold text-slate-700 hover:bg-slate-50"
-                  >
-                    <X size={14} />
-                    Exit Split View
-                  </button>
-                )}
                 <div className="bg-white px-5 py-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col min-w-[180px]">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Client</span>
                   <span className="text-sm font-bold text-slate-700 truncate">
@@ -1028,71 +892,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
             </header>
 
             <div className="px-8 pb-32 max-w-7xl mx-auto w-full space-y-8">
-              {selectedEstimationFile ? (
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
-                  <section className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden min-h-[70vh]">
-                    <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-                      <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">Estimation File Preview</h3>
-                      <a
-                        href={selectedEstimationFile.fileUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs font-bold text-indigo-600 hover:underline"
-                      >
-                        Open original file
-                      </a>
-                    </div>
-                    <div className="h-[70vh] overflow-auto bg-slate-100">
-                      <iframe
-                        src={selectedEstimationFile.previewUrl}
-                        title={selectedEstimationFile.filename}
-                        className="w-full h-full border-0"
-                      />
-                    </div>
-                  </section>
-
-                  <div className="space-y-8">
-                    <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden">
-                      <div className="p-8 border-b border-slate-100">
-                        <h3 className="text-xl font-black text-slate-900">Recipient Details</h3>
-                      </div>
-                      <div className="p-8">
-                        <CustomerForm customer={customer} setCustomer={setCustomer} onValidationChange={setIsFormValid} />
-                      </div>
-                    </div>
-
-                    <ProductList products={dynamicProducts} onAdd={addItem} />
-
-                    <QuotationSummary
-                      items={items}
-                      onUpdateQty={(id, q) => updateItem(id, { quantity: q })}
-                      onUpdateItem={updateItem}
-                      onRemove={(id) => setItems(prev => prev.filter(x => x.id !== id))}
-                      onClear={() => { setItems([]); setUploadedFiles([]); }}
-                      subtotal={subtotal}
-                      laborCost={laborCost}
-                      vat={vatAmount}
-                      discountValue={discountValue}
-                      discountType={discountType}
-                      onDiscountValueChange={setDiscountValue}
-                      onDiscountTypeChange={setDiscountType}
-                      showVat={showVat}
-                      onShowVatChange={setShowVat}
-                      total={grandTotal}
-                      isValid={isFormValid && items.length > 0}
-                      pdfFileName={pdfFileName}
-                      onPdfFileNameChange={setPdfFileName}
-                      referenceCode={previewId}
-                      onReferenceCodeChange={setPreviewId}
-                      onPreview={() => { setIsPreviewOpen(true); }}
-                      onSubmit={handleSubmitPipeline}
-                      onSendEmail={async () => { setIsPreviewOpen(true); }}
-                      clientType={customer.clientType}
-                    />
-                  </div>
-                </div>
-              ) : (
-              <>
               {/* AI Assistant Section */}
               <div ref={chatSensorRef} className="w-full min-h-[600px]">
                 <AIChat 
@@ -1167,8 +966,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                    </div>
                 </div>
               </div>
-              </>
-              )}
             </div>
           </div>
         )}

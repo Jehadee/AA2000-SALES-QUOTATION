@@ -1,0 +1,7 @@
+{
+  "name": "Remix: AA2000 Sales quotation",
+  "description": "A comprehensive sales quotation generator with AI-powered item entry, real-time totals, PDF export, and a searchable product catalog.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

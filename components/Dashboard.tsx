@@ -1029,8 +1029,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
 
             <div className="px-8 pb-32 max-w-7xl mx-auto w-full space-y-8">
               {selectedEstimationFile ? (
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
-                  <section className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden min-h-[70vh]">
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 items-start">
+                  <section className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden xl:sticky xl:top-6 xl:self-start">
                     <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
                       <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">Estimation File Preview</h3>
                       <a
@@ -1042,7 +1042,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                         Open original file
                       </a>
                     </div>
-                    <div className="h-[70vh] overflow-auto bg-slate-100">
+                    <div className="h-[78vh] overflow-auto bg-slate-100">
                       <iframe
                         src={selectedEstimationFile.previewUrl}
                         title={selectedEstimationFile.filename}

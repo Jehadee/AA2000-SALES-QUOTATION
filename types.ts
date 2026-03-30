@@ -129,6 +129,8 @@ export interface QuotationRecord {
   logs: FollowUpLog[];
   attachments: Attachment[];
   version: number;
+  /** When true, quote lives in Draft Inbox until promoted to the main pipeline. */
+  isDraft?: boolean;
 }
 
 export interface PDFTemplate {

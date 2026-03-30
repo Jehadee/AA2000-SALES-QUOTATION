@@ -76,7 +76,7 @@ export async function fetchEstimationFiles(): Promise<EstimationFileRecord[]> {
     }
     lastStatus = res.status;
   }
-
+  
   if (!data) {
     throw new Error(
       `Failed to fetch estimation files. Tried: ${candidates.join(', ')}${lastStatus ? ` (last status ${lastStatus})` : ''}`

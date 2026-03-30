@@ -11,9 +11,11 @@ interface Props {
   onAddLog: (id: string, log: FollowUpLog) => void;
   onRevise: (quote: QuotationRecord) => void;
   onPreviewPDF: () => void;
+  /** Move a draft quotation into the main sales pipeline. */
+  onPromoteFromDraft?: (id: string) => void;
 }
 
-const PipelineDetail: React.FC<Props> = ({ quote, onClose, onUpdateStatus, onAddLog, onRevise, onPreviewPDF }) => {
+const PipelineDetail: React.FC<Props> = ({ quote, onClose, onUpdateStatus, onAddLog, onRevise, onPreviewPDF, onPromoteFromDraft }) => {
   const [activeTab, setActiveTab] = useState<'status' | 'overview' | 'items' | 'history'>('status');
   const [newNote, setNewNote] = useState('');
 
@@ -66,6 +68,27 @@ const PipelineDetail: React.FC<Props> = ({ quote, onClose, onUpdateStatus, onAdd
         {label} <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
       </button>
     );
+
+    if (quote.isDraft && onPromoteFromDraft) {
+      return (
+        <div className="bg-amber-50 p-4 sm:p-6 rounded-2xl border border-amber-100 mb-6">
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <span className="text-[10px] font-black text-amber-700 uppercase tracking-widest block">Draft Inbox</span>
+              <span className="text-sm font-black text-amber-900 uppercase tracking-wide">Review before pipeline</span>
+            </div>
+          </div>
+          <p className="text-xs text-amber-900/80 mb-4 leading-relaxed">
+            This quote is not in the sales pipeline yet. Preview the PDF, send email to the customer if you want, then add it to the pipeline when you are ready.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3">
+            {secondaryBtn('Edit / Revise', () => onRevise(quote))}
+            {emailBtn('Preview & Send Email', onPreviewPDF)}
+            {primaryBtn('Add to Pipeline', () => onPromoteFromDraft(quote.id))}
+          </div>
+        </div>
+      );
+    }
 
     return (
       <div className="bg-slate-50 p-4 sm:p-6 rounded-2xl border border-slate-100 mb-6">
@@ -147,12 +170,18 @@ const PipelineDetail: React.FC<Props> = ({ quote, onClose, onUpdateStatus, onAdd
           <div>
              <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 mb-1">
                <h2 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight">{quote.id}</h2>
+               {quote.isDraft ? (
+                 <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-widest w-fit bg-amber-100 text-amber-800">
+                   Draft
+                 </span>
+               ) : (
                <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-widest w-fit ${
                  quote.status === QuotationStatus.ACCEPTED ? 'bg-emerald-100 text-emerald-600' : 
                  quote.status === QuotationStatus.REJECTED ? 'bg-red-100 text-red-600' : 'bg-indigo-50 text-indigo-600'
                }`}>
                  {quote.status}
                </span>
+               )}
              </div>
              <p className="text-xs sm:text-sm font-medium text-slate-500 truncate max-w-[200px] sm:max-w-none">{quote.customer.fullName} — {quote.customer.companyName}</p>
           </div>
@@ -184,6 +213,11 @@ const PipelineDetail: React.FC<Props> = ({ quote, onClose, onUpdateStatus, onAdd
           {/* STATUS TAB */}
           {activeTab === 'status' && (
             <div className="p-4 sm:p-8 space-y-8 animate-in fade-in duration-300">
+               {quote.isDraft && (
+                 <div className="bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3 text-xs text-amber-900 font-medium">
+                   Draft Inbox — this quotation is staged for review. It will appear in the main pipeline after you use &quot;Add to Pipeline&quot;.
+                 </div>
+               )}
                <div className="bg-slate-50 rounded-3xl p-6 border border-slate-100">
                   <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-6">Real-time Progress</h3>
                   <FlowchartProgress currentStatus={quote.status} />

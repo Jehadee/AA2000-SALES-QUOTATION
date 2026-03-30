@@ -218,7 +218,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
       const files = await fetchEstimationFiles();
       setEstimationFiles(files);
     } catch (e: any) {
-      setEstimationError(e?.message || 'Failed to load estimation files');
+      const msg = e?.message || 'Failed to load estimation files';
+      setEstimationError(msg);
+      // Make backend/deployment failures obvious even if the list area is empty.
+      showToast(msg, 'error');
     } finally {
       setIsLoadingEstimations(false);
     }

@@ -107,6 +107,8 @@ export async function fetchEstimationFiles(): Promise<EstimationFileRecord[]> {
   let lastStatus: number | null = null;
   let data: any = null;
   let usedPath = '';
+  let lastNonJsonBody: string | null = null;
+  let lastNonJsonUrl: string | null = null;
 
   for (const path of candidates) {
     const listUrl = buildAbsoluteUrl(path);
@@ -117,22 +119,23 @@ export async function fetchEstimationFiles(): Promise<EstimationFileRecord[]> {
       const rawText = await res.text();
       try {
         data = JSON.parse(rawText);
+        usedPath = path;
+        break;
       } catch {
-        const snippet = rawText.trim().slice(0, 200).replace(/\s+/g, ' ');
-        throw new Error(
-          `Estimation list endpoint did not return JSON. URL=${listUrl} Status=${res.status} ` +
-            `FirstChars="${snippet}"`
-        );
+        // Not JSON: try next candidate endpoint instead of failing the whole fetch.
+        lastNonJsonUrl = listUrl;
+        lastNonJsonBody = rawText.trim().slice(0, 200);
       }
-      usedPath = path;
-      break;
+    } else {
+      lastStatus = res.status;
     }
-    lastStatus = res.status;
   }
   
   if (!data) {
     throw new Error(
-      `Failed to fetch estimation files. Tried: ${candidates.join(', ')}${lastStatus ? ` (last status ${lastStatus})` : ''}`
+      `Failed to fetch estimation files JSON. Tried: ${candidates.join(', ')}${
+        lastStatus ? ` (last status ${lastStatus})` : ''
+      }${lastNonJsonUrl ? ` (non-JSON response at ${lastNonJsonUrl}; FirstChars="${(lastNonJsonBody || '').replace(/\s+/g, ' ')}")` : ''}`
     );
   }
 

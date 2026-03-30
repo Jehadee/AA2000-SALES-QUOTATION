@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, ChevronLeft, Search, Filter, Trash2, FolderOpen, RefreshCw, X, Inbox } from 'lucide-react';
+import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, Inbox, PanelLeftClose, PanelLeft } from 'lucide-react';
 import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile } from '../types';
 import { PRODUCTS, COMPANY_DETAILS, DEFAULT_PDF_TEMPLATE, INITIAL_CUSTOMER } from '../constants';
 import { processConversation } from '../services/geminiService';
@@ -923,14 +923,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
 
       {/* Sidebar - Dark Theme */}
       <aside
-        className={`bg-[#0B1120] text-white flex flex-col flex-shrink-0 transition-[width] duration-300 ease-out z-50 overflow-hidden ${sidebarOpen ? 'w-72' : 'w-0'}`}
+        className={`bg-[#0B1120] text-white flex flex-col flex-shrink-0 z-50 overflow-hidden transition-[width] duration-300 ease-out ${sidebarOpen ? 'w-72' : 'w-0'}`}
         aria-hidden={!sidebarOpen}
       >
-        <div className="w-72 h-full flex flex-col min-h-0">
-        <div className="p-6 flex-1 min-h-0 overflow-y-auto">
+        <div className="w-72 min-h-full flex flex-col flex-shrink-0">
+        <div className="p-6">
           <div className="flex items-start gap-2 mb-8">
-            <div className="flex items-center gap-3 min-w-0 flex-1">
-              <div className="w-10 h-10 bg-cyan-500 rounded-xl flex items-center justify-center text-[#0B1120] font-black text-sm shadow-lg shadow-cyan-500/20 shrink-0">AA</div>
+            <div className="flex items-center gap-3 flex-1 min-w-0">
+              <div className="w-10 h-10 shrink-0 bg-cyan-500 rounded-xl flex items-center justify-center text-[#0B1120] font-black text-sm shadow-lg shadow-cyan-500/20">AA</div>
               <div className="min-w-0">
                 <h1 className="font-bold text-base tracking-wide text-white">AA2000</h1>
                 <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Sales Operations Suite</p>
@@ -939,11 +939,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
             <button
               type="button"
               onClick={() => setSidebarOpen(false)}
-              className="shrink-0 p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/80 transition-colors"
+              className="shrink-0 p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/80 transition-colors"
               title="Hide sidebar"
-              aria-label="Hide sidebar"
+              aria-label="Hide sidebar for more workspace space"
             >
-              <ChevronLeft size={20} strokeWidth={2} />
+              <PanelLeftClose size={20} strokeWidth={2} />
             </button>
           </div>
 
@@ -1046,20 +1046,20 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
         </div>
       </aside>
 
-      {!sidebarOpen && (
-        <button
-          type="button"
-          onClick={() => setSidebarOpen(true)}
-          className="fixed left-0 top-1/2 -translate-y-1/2 z-[60] flex items-center justify-center w-9 h-14 rounded-r-xl bg-[#0B1120] text-slate-300 hover:text-white border border-slate-700/60 border-l-0 shadow-lg shadow-black/20 hover:bg-[#1E293B] transition-colors"
-          title="Show sidebar"
-          aria-label="Show sidebar"
-        >
-          <ChevronRight size={20} strokeWidth={2} />
-        </button>
-      )}
-
       {/* Main Content Area */}
-      <main className="flex-1 overflow-y-auto relative scroll-smooth bg-[#F8F9FA] min-w-0">
+      <main className="flex-1 overflow-y-auto relative scroll-smooth bg-[#F8F9FA]">
+        {!sidebarOpen && (
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            className="fixed top-4 left-4 z-40 flex items-center gap-2 pl-3 pr-4 py-2.5 rounded-xl bg-[#0B1120] text-white text-xs font-bold uppercase tracking-wider shadow-lg shadow-black/20 border border-slate-700/50 hover:bg-slate-900 transition-colors"
+            title="Show sidebar"
+            aria-label="Show navigation sidebar"
+          >
+            <PanelLeft size={18} strokeWidth={2} />
+            Menu
+          </button>
+        )}
         {activeTab === 'estimation' && (
           <div className="p-8 max-w-7xl mx-auto min-h-full">
             <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm min-h-[80vh]">
@@ -1090,6 +1090,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                     <tr>
                       <th className="px-6 py-4 first:rounded-l-xl">File Name</th>
                       <th className="px-6 py-4">Type</th>
+                      <th className="px-6 py-4">Saved</th>
                       <th className="px-6 py-4">Preview</th>
                       <th className="px-6 py-4 last:rounded-r-xl">Action</th>
                     </tr>
@@ -1097,7 +1098,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                   <tbody className="divide-y divide-slate-50">
                     {!isLoadingEstimations && estimationFiles.length === 0 ? (
                       <tr>
-                        <td colSpan={4} className="text-center py-16 text-slate-400 text-sm font-medium">
+                        <td colSpan={5} className="text-center py-16 text-slate-400 text-sm font-medium">
                           No estimation files found.
                         </td>
                       </tr>
@@ -1109,6 +1110,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                           </td>
                           <td className="px-6 py-5 text-sm font-medium text-slate-600">
                             {f.isPdf ? 'PDF' : f.isDocx ? 'DOCX' : (f.extension ? f.extension.toUpperCase() : 'FILE')}
+                          </td>
+                          <td className="px-6 py-5 text-xs text-slate-500">
+                            {f.createdAt ? new Date(f.createdAt).toLocaleString() : '-'}
                           </td>
                           <td className="px-6 py-5">
                             <a
@@ -1211,11 +1215,33 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                       </a>
                     </div>
                     <div className="h-[78vh] overflow-auto bg-slate-100">
-                      <iframe
-                        src={selectedEstimationFile.previewUrl}
-                        title={selectedEstimationFile.filename}
-                        className="w-full h-full border-0"
-                      />
+                      {selectedEstimationFile.previewUrl ? (
+                        <iframe
+                          src={selectedEstimationFile.previewUrl}
+                          title={selectedEstimationFile.filename}
+                          className="w-full h-full min-h-[320px] border-0"
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center justify-center h-full min-h-[320px] p-8 text-center gap-4">
+                          <div className="w-14 h-14 rounded-2xl bg-white border border-slate-200 shadow-sm flex items-center justify-center text-slate-400">
+                            <FileText size={28} strokeWidth={2} />
+                          </div>
+                          <div className="max-w-md space-y-2">
+                            <p className="text-sm font-bold text-slate-800">Preview is not available in the browser</p>
+                            <p className="text-xs text-slate-600 leading-relaxed">
+                              Word files are normally shown with Microsoft&apos;s online viewer, which only works when the file address is reachable from the public internet (not local networks or dev tunnels). Open the file in a new tab to view it with your signed-in session.
+                            </p>
+                          </div>
+                          <a
+                            href={selectedEstimationFile.fileUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-indigo-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-indigo-500"
+                          >
+                            Open file
+                          </a>
+                        </div>
+                      )}
                     </div>
                   </section>
 

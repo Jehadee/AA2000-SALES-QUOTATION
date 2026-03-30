@@ -1,10 +1,52 @@
 export interface EstimationFileRecord {
   filename: string;
   fileUrl: string;
+  /** ISO string of the file created date/time when returned by the server list endpoint. */
+  createdAt?: string;
+  /** URL for iframe preview: PDF from get route, DOCX from server /preview (PDF) or Office Online fallback. */
   previewUrl: string;
   extension: string;
   isPdf: boolean;
   isDocx: boolean;
+  /** True when Word has no inline preview (no API preview URL and Office Online not usable). */
+  docxInlinePreviewSkipped?: boolean;
+}
+
+const ESTIMATION_LIST_SUFFIX = '/list/estimationFiles';
+
+function estimationRoutePrefixFromListPath(usedPath: string, isApiPrefixed: boolean): string {
+  if (usedPath.endsWith(ESTIMATION_LIST_SUFFIX)) {
+    return usedPath.slice(0, -ESTIMATION_LIST_SUFFIX.length);
+  }
+  return isApiPrefixed ? '/api/products' : '';
+}
+
+/**
+ * Office Online embed fetches `src` from Microsoft's servers — localhost, tunnels, and auth-only URLs fail with
+ * "not valid or not publicly accessible". Call this before building an Office embed URL.
+ */
+export function canOfficeOnlinePreview(fileUrl: string): boolean {
+  const flag = (import.meta as any).env?.VITE_ESTIMATION_OFFICE_PREVIEW as string | undefined;
+  if (flag === '0' || flag === 'false') return false;
+  if (flag === '1' || flag === 'true') return true;
+
+  try {
+    const u = new URL(fileUrl);
+    const h = u.hostname.toLowerCase();
+    if (h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h.endsWith('.local')) return false;
+    if (/^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(h)) return false;
+    if (
+      /devtunnels\.ms$/i.test(h) ||
+      h.endsWith('.ngrok-free.app') ||
+      h.endsWith('.ngrok.io') ||
+      /loca\.lt$/i.test(h) ||
+      h.endsWith('.trycloudflare.com')
+    )
+      return false;
+    return u.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 function getBaseUrl(): string {
@@ -85,31 +127,58 @@ export async function fetchEstimationFiles(): Promise<EstimationFileRecord[]> {
 
   const files = Array.isArray(data) ? data : (Array.isArray(data?.files) ? data.files : []);
   const isApiPrefixed = usedPath.startsWith('/api/');
+  const estimationRoutePrefix = estimationRoutePrefixFromListPath(usedPath, isApiPrefixed);
 
   return files
     .map((f: unknown) => {
-      const filename = typeof f === 'string' ? f : String((f as any)?.filename ?? (f as any)?.name ?? '').trim();
+      const filename =
+        typeof f === 'string' ? f : String((f as any)?.filename ?? (f as any)?.name ?? '').trim();
       if (!filename) return null;
+      const createdAt =
+        typeof f === 'string'
+          ? undefined
+          : (f as any)?.createdAt
+            ? String((f as any).createdAt)
+            : undefined;
       const extensionMatch = filename.match(/\.([a-z0-9]+)$/i);
       const extension = extensionMatch ? extensionMatch[1].toLowerCase() : '';
       const isPdf = extension === 'pdf';
       const isDocx = extension === 'docx' || extension === 'doc';
       let fileUrl = buildFileUrl(filename);
-      if (isApiPrefixed && !/^https?:\/\//i.test(fileUrl) && !fileUrl.includes('/api/')) {
-        fileUrl = buildAbsoluteUrl(`/api/products/get/estimationFile/${encodeURIComponent(filename)}`);
+      if (isApiPrefixed && estimationRoutePrefix && !/^https?:\/\//i.test(fileUrl) && !fileUrl.includes('/api/')) {
+        fileUrl = buildAbsoluteUrl(
+          `${estimationRoutePrefix}/get/estimationFile/${encodeURIComponent(filename)}`
+        );
       }
+
+      // Prefer your server-side DOCX->PDF preview route whenever we can infer the mount prefix
+      // from the list endpoint we successfully fetched.
+      const serverDocxPreview =
+        isDocx && estimationRoutePrefix
+          ? buildAbsoluteUrl(
+              `${estimationRoutePrefix}/preview/estimationFile/${encodeURIComponent(filename)}`
+            )
+          : '';
+      const useOffice = isDocx && !serverDocxPreview && canOfficeOnlinePreview(fileUrl);
+
       const previewUrl = isPdf
         ? fileUrl
         : isDocx
-          ? `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(fileUrl)}`
+          ? serverDocxPreview ||
+            (useOffice
+              ? `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(fileUrl)}`
+              : '')
           : fileUrl;
+
       return {
         filename,
         fileUrl,
+        createdAt,
         previewUrl,
         extension,
         isPdf,
         isDocx,
+        docxInlinePreviewSkipped: isDocx && !previewUrl,
       } as EstimationFileRecord;
     })
     .filter((x: EstimationFileRecord | null): x is EstimationFileRecord => x !== null);

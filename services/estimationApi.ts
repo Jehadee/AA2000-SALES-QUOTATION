@@ -112,7 +112,18 @@ export async function fetchEstimationFiles(): Promise<EstimationFileRecord[]> {
     const listUrl = buildAbsoluteUrl(path);
     const res = await fetch(listUrl, { method: 'GET', headers: { Accept: 'application/json' } });
     if (res.ok) {
-      data = await res.json();
+      // Some deployments return an HTML fallback (e.g. Vercel 404 page or SPA index.html),
+      // which causes `res.json()` to throw "Unexpected token '<'".
+      const rawText = await res.text();
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        const snippet = rawText.trim().slice(0, 200).replace(/\s+/g, ' ');
+        throw new Error(
+          `Estimation list endpoint did not return JSON. URL=${listUrl} Status=${res.status} ` +
+            `FirstChars="${snippet}"`
+        );
+      }
       usedPath = path;
       break;
     }

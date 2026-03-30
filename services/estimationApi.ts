@@ -89,6 +89,16 @@ function buildFileUrl(filename: string): string {
 }
 
 export async function fetchEstimationFiles(): Promise<EstimationFileRecord[]> {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) {
+    // If baseUrl is empty, all candidate endpoints become relative paths and Vercel will return HTML
+    // (index.html / fallback), causing JSON parsing errors.
+    throw new Error(
+      `Missing VITE_API_BASE_URL. The estimation list fetch would call relative URLs on Vercel (HTML instead of JSON). ` +
+        `Set VITE_API_BASE_URL to your backend origin (e.g. "https://your-server-host.com") and ensure VITE_API_BASE_PATH matches.`
+    );
+  }
+
   const configured = getListPath();
   const apiBasePath = getApiBasePath();
   const candidates = Array.from(

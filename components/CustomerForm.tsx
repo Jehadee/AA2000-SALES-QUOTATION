@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { CustomerInfo, ClientType } from '../types';
 import { INITIAL_CUSTOMER } from '../constants';
-import { Trash2, MapPin, Crosshair } from 'lucide-react';
+import { Trash2, MapPin, Crosshair, Search } from 'lucide-react';
 import { reverseGeocode, searchPlaces } from '../services/geocoding';
 import LocationPicker, { type LatLon } from './LocationPicker';
+import { fetchCustomers, type CustomerDirectoryItem } from '../services/customerApi';
 
 const DEFAULT_LOCATION: LatLon = { lat: 14.5995, lon: 120.9842 };
 
@@ -20,6 +21,11 @@ const CustomerForm: React.FC<Props> = React.memo(({ customer, setCustomer, onVal
   const [locError, setLocError] = useState<string | null>(null);
   const [locQuery, setLocQuery] = useState('');
   const [locResults, setLocResults] = useState<{ displayName: string; lat: number; lon: number }[]>([]);
+  const [directoryQuery, setDirectoryQuery] = useState('');
+  const [customerDirectory, setCustomerDirectory] = useState<CustomerDirectoryItem[]>([]);
+  const [isCustomerListOpen, setIsCustomerListOpen] = useState(false);
+  const [customerDirectoryError, setCustomerDirectoryError] = useState<string | null>(null);
+  const directoryRef = useRef<HTMLDivElement>(null);
 
   const validate = () => {
     const newErrors: { [key: string]: string } = {};
@@ -40,6 +46,32 @@ const CustomerForm: React.FC<Props> = React.memo(({ customer, setCustomer, onVal
     validate();
   }, [customer]);
 
+  useEffect(() => {
+    let mounted = true;
+    fetchCustomers()
+      .then((rows) => {
+        if (!mounted) return;
+        setCustomerDirectory(rows);
+      })
+      .catch((err) => {
+        if (!mounted) return;
+        setCustomerDirectoryError(err instanceof Error ? err.message : 'Failed to load customer directory');
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleOutside = (event: MouseEvent) => {
+      if (directoryRef.current && !directoryRef.current.contains(event.target as Node)) {
+        setIsCustomerListOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, []);
+
   const handleChange = (field: keyof CustomerInfo, value: any) => {
     setCustomer(prev => {
       const next = { ...prev, [field]: value };
@@ -54,6 +86,44 @@ const CustomerForm: React.FC<Props> = React.memo(({ customer, setCustomer, onVal
     const val = e.target.value;
     const numericValue = val.replace(/[^\d]/g, '').slice(0, 11);
     handleChange('phone', numericValue);
+  };
+
+  const filteredCustomers = customerDirectory
+    .filter((c) => {
+      if (!directoryQuery.trim()) return true;
+      const q = directoryQuery.toLowerCase();
+      return (
+        c.fullName.toLowerCase().includes(q) ||
+        c.companyName.toLowerCase().includes(q) ||
+        c.email.toLowerCase().includes(q) ||
+        c.phone.toLowerCase().includes(q)
+      );
+    })
+    .slice(0, 8);
+
+  const applyCustomerSelection = (entry: CustomerDirectoryItem) => {
+    setCustomer((prev) => ({
+      ...prev,
+      fname: entry.fname || prev.fname,
+      mname: entry.mname || '',
+      lname: entry.lname || prev.lname,
+      fullName: entry.fullName || [entry.fname, entry.mname, entry.lname].filter(Boolean).join(' ').trim() || prev.fullName,
+      email: entry.email || prev.email,
+      phone: entry.phone || prev.phone,
+      companyName: entry.companyName || prev.companyName,
+      address: entry.address || prev.address,
+      latitude: entry.latitude ?? prev.latitude,
+      longitude: entry.longitude ?? prev.longitude,
+      street: entry.street ?? prev.street,
+      municipality: entry.municipality ?? prev.municipality,
+      province: entry.province ?? prev.province,
+      postal: entry.postal ?? prev.postal,
+    }));
+    if (entry.latitude != null && entry.longitude != null) {
+      setLocation({ lat: entry.latitude, lon: entry.longitude });
+    }
+    setDirectoryQuery(entry.fullName || entry.companyName || '');
+    setIsCustomerListOpen(false);
   };
 
   const applyReverseGeocode = async (lat: number, lon: number) => {
@@ -154,6 +224,46 @@ const CustomerForm: React.FC<Props> = React.memo(({ customer, setCustomer, onVal
           <Trash2 size={14} />
           CLEAR DETAILS
         </button>
+      </div>
+
+      <div className="mb-6 sm:mb-8" ref={directoryRef}>
+        <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider">Search Existing Customer</label>
+        <div className="relative mt-2">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            value={directoryQuery}
+            onFocus={() => setIsCustomerListOpen(true)}
+            onChange={(e) => {
+              setDirectoryQuery(e.target.value);
+              setIsCustomerListOpen(true);
+            }}
+            className="w-full pl-10 pr-4 py-3 text-sm bg-slate-50 border-2 border-slate-100 rounded-2xl focus:border-indigo-500 outline-none transition-all"
+            placeholder="Search by name, company, email, or phone..."
+          />
+          {isCustomerListOpen && (
+            <div className="absolute z-40 mt-2 w-full max-h-72 overflow-auto bg-white border border-slate-200 rounded-2xl shadow-lg">
+              {customerDirectoryError && (
+                <p className="px-4 py-3 text-xs font-semibold text-red-600">{customerDirectoryError}</p>
+              )}
+              {!customerDirectoryError && filteredCustomers.length === 0 && (
+                <p className="px-4 py-3 text-xs text-slate-500">No customer found.</p>
+              )}
+              {!customerDirectoryError &&
+                filteredCustomers.map((entry) => (
+                  <button
+                    key={`${entry.id}`}
+                    type="button"
+                    onClick={() => applyCustomerSelection(entry)}
+                    className="w-full px-4 py-3 text-left hover:bg-slate-50 border-b border-slate-100 last:border-b-0 transition-colors"
+                  >
+                    <p className="text-sm font-bold text-slate-800">{entry.fullName || '-'}</p>
+                    <p className="text-[11px] text-slate-500">{entry.companyName || 'No company'} • {entry.email || 'No email'}</p>
+                  </button>
+                ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">

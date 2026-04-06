@@ -28,10 +28,218 @@ type SessionBridgeMessage = {
   };
 };
 
+const SESSION_TOKEN_ENC_KEY = 'sessionTokenEnc';
+const SESSION_ID_ENC_KEY = 'sessionIdEnc';
+const SESSION_TOKEN_LEGACY_KEY = 'sessionToken';
+const SESSION_ID_LEGACY_KEY = 'sessionId';
+const SESSION_STORAGE_CRYPTO_KEY = 'sessionStorageCryptoKeyV1';
+
 function normalizeUserRole(input?: string | null): UserRole {
   const role = String(input || '').trim().toUpperCase();
   if (role.includes('ADMIN')) return 'ADMIN';
   return 'SALES';
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  bytes.forEach((b) => {
+    binary += String.fromCharCode(b);
+  });
+  return btoa(binary);
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
+}
+
+function base64UrlToBase64(input: string): string {
+  const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = normalized.length % 4;
+  if (pad === 0) return normalized;
+  return normalized + '='.repeat(4 - pad);
+}
+
+function base64UrlToBytes(input: string): Uint8Array {
+  const b64 = input.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = b64.length % 4 === 0 ? '' : '='.repeat(4 - (b64.length % 4));
+  const binary = atob(b64 + pad);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+async function deriveAesKeyFromSecret(secret: string): Promise<CryptoKey> {
+  const secretBytes = new TextEncoder().encode(secret);
+  const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(secretBytes));
+  return crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, ['decrypt']);
+}
+
+async function decryptLaunchToken(token: string): Promise<string> {
+  const launchSecret =
+    String((import.meta as any).env?.VITE_LAUNCH_TOKEN_SECRET ?? '').trim() ||
+    'aa2k-launch-secret-v1';
+  const c = globalThis.crypto;
+  if (!c?.subtle) throw new Error('WebCrypto not available');
+  const payload = base64UrlToBytes(token);
+  if (payload.length <= 12) throw new Error('Invalid token payload');
+
+  const iv = payload.slice(0, 12);
+  const cipher = payload.slice(12);
+  const key = await deriveAesKeyFromSecret(launchSecret);
+  const plain = await c.subtle.decrypt(
+    { name: 'AES-GCM', iv: toArrayBuffer(iv) },
+    key,
+    toArrayBuffer(cipher)
+  );
+  return new TextDecoder().decode(plain);
+}
+
+async function decryptAesTokenWithSecret(payload: string, secret: string): Promise<string | null> {
+  const idx = payload.indexOf(':');
+  if (idx <= 0) return null;
+  const ivRaw = payload.slice(0, idx);
+  const cipherRaw = payload.slice(idx + 1);
+  if (!ivRaw || !cipherRaw) return null;
+
+  try {
+    const iv = base64ToBytes(base64UrlToBase64(ivRaw));
+    const cipher = base64ToBytes(base64UrlToBase64(cipherRaw));
+    const key = await deriveAesKeyFromSecret(secret);
+    const plainBuffer = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: toArrayBuffer(iv) },
+      key,
+      toArrayBuffer(cipher)
+    );
+    return new TextDecoder().decode(plainBuffer);
+  } catch {
+    return null;
+  }
+}
+
+function tryDecodeBase64Text(input: string): string | null {
+  try {
+    const bytes = base64ToBytes(base64UrlToBase64(input));
+    const decoded = new TextDecoder().decode(bytes);
+    return decoded || null;
+  } catch {
+    return null;
+  }
+}
+
+async function normalizeIncomingLaunchToken(rawToken: string): Promise<string> {
+  const env = (import.meta as any).env ?? {};
+  const secret = String(env.VITE_LAUNCH_TOKEN_SECRET ?? '').trim();
+  const mode = String(env.VITE_LAUNCH_TOKEN_ENCRYPTION ?? '').trim().toLowerCase();
+  const value = rawToken ?? '';
+  if (!value) return '';
+
+  // Primary receiver-compatible mode:
+  // token is base64url(payload), first 12 bytes = IV, rest = AES-GCM cipher, key = SHA-256(secret)
+  if (mode === 'receiver' || mode === 'aes-gcm-payload' || mode === 'aes-gcm' || mode === '') {
+    try {
+      const decrypted = await decryptLaunchToken(value);
+      if (decrypted) return decrypted;
+    } catch {
+      // continue to compatibility fallbacks below
+    }
+  }
+
+  // 1) "enc::<iv>:<cipher>" or "<iv>:<cipher>" AES-GCM using shared secret
+  const payload = value.startsWith('enc::') ? value.slice(5) : value;
+  if ((mode === 'aes' || mode === 'aes-gcm' || value.startsWith('enc::') || payload.includes(':')) && secret) {
+    const decrypted = await decryptAesTokenWithSecret(payload, secret);
+    if (decrypted) return decrypted;
+  }
+
+  // 2) URL-decoded token (common when upstream applies encodeURIComponent)
+  try {
+    const urlDecoded = decodeURIComponent(value);
+    if (urlDecoded && urlDecoded !== value) return urlDecoded;
+  } catch {
+    // ignore invalid URI sequences
+  }
+
+  // 3) Base64/Base64URL plain text token encoding
+  if (mode === 'base64' || mode === 'base64url' || /^[A-Za-z0-9\-_+/=]+$/.test(value)) {
+    const b64 = tryDecodeBase64Text(value);
+    if (b64) return b64;
+  }
+
+  // 4) Fallback to raw value
+  return value;
+}
+
+async function getOrCreateStorageCryptoKey(): Promise<CryptoKey> {
+  const existing = localStorage.getItem(SESSION_STORAGE_CRYPTO_KEY);
+  if (existing) {
+    return crypto.subtle.importKey('raw', toArrayBuffer(base64ToBytes(existing)), { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+  }
+  const rawKey = crypto.getRandomValues(new Uint8Array(32));
+  localStorage.setItem(SESSION_STORAGE_CRYPTO_KEY, bytesToBase64(rawKey));
+  return crypto.subtle.importKey('raw', toArrayBuffer(rawKey), { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+}
+
+async function encryptForSessionStorage(plainText: string): Promise<string> {
+  const key = await getOrCreateStorageCryptoKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(plainText);
+  const cipherBuffer = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: toArrayBuffer(iv) }, key, toArrayBuffer(encoded));
+  return `${bytesToBase64(iv)}:${bytesToBase64(new Uint8Array(cipherBuffer))}`;
+}
+
+async function decryptFromSessionStorage(payload: string): Promise<string | null> {
+  const idx = payload.indexOf(':');
+  if (idx <= 0) return null;
+  const ivPart = payload.slice(0, idx);
+  const cipherPart = payload.slice(idx + 1);
+  const iv = base64ToBytes(ivPart);
+  const cipher = base64ToBytes(cipherPart);
+  const key = await getOrCreateStorageCryptoKey();
+  const plainBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: toArrayBuffer(iv) }, key, toArrayBuffer(cipher));
+  return new TextDecoder().decode(plainBuffer);
+}
+
+async function setEncryptedSessionValue(storageKey: string, value: string): Promise<void> {
+  const encrypted = await encryptForSessionStorage(value);
+  sessionStorage.setItem(storageKey, encrypted);
+}
+
+async function getDecryptedSessionValue(storageKey: string): Promise<string> {
+  const encrypted = sessionStorage.getItem(storageKey);
+  if (!encrypted) return '';
+  try {
+    const plain = await decryptFromSessionStorage(encrypted);
+    return plain ?? '';
+  } catch {
+    return '';
+  }
+}
+
+async function setSessionTokenSecure(token: string): Promise<void> {
+  await setEncryptedSessionValue(SESSION_TOKEN_ENC_KEY, token);
+  // Remove legacy plain-text key.
+  sessionStorage.removeItem(SESSION_TOKEN_LEGACY_KEY);
+}
+
+async function getSessionTokenSecure(): Promise<string> {
+  const enc = await getDecryptedSessionValue(SESSION_TOKEN_ENC_KEY);
+  if (enc) return enc;
+  // Backward compatibility for previous plain-text sessions.
+  return sessionStorage.getItem(SESSION_TOKEN_LEGACY_KEY) || '';
+}
+
+async function setSessionIdSecure(sessionId: string): Promise<void> {
+  await setEncryptedSessionValue(SESSION_ID_ENC_KEY, sessionId);
+  sessionStorage.removeItem(SESSION_ID_LEGACY_KEY);
 }
 
 function resolveRoleFromSessionPayload(data: VerifyLaunchResponse): UserRole {
@@ -146,6 +354,24 @@ function getTokenFromCurrentUrl(): string {
   return '';
 }
 
+function getSanitizedUrlWithoutLaunchToken(): string {
+  const params = new URLSearchParams(window.location.search || '');
+  params.delete('__launch');
+  params.delete('launchToken');
+  params.delete('sessionToken');
+  params.delete('token');
+
+  let pathname = window.location.pathname || '/';
+  // Remove path-style launch token: "/__launch=TOKEN"
+  pathname = pathname.replace(/\/__launch=[^/?#]+/, '');
+  if (!pathname.startsWith('/')) pathname = `/${pathname}`;
+  if (!pathname) pathname = '/';
+
+  const qs = params.toString();
+  const hash = window.location.hash || '';
+  return `${pathname}${qs ? `?${qs}` : ''}${hash}`;
+}
+
 async function verifyLaunchToken(launchToken: string): Promise<VerifyLaunchResponse | null> {
   const env = (import.meta as any).env ?? {};
   const launchUrlOverride = String(env.VITE_VERIFY_LAUNCH_URL ?? '').trim();
@@ -257,14 +483,18 @@ const App: React.FC = () => {
       const roleInput = data.roleName ?? data.account?.role_name ?? '';
 
       if (!token) return;
-      try {
-        sessionStorage.setItem('sessionToken', token);
-        if (sid != null) sessionStorage.setItem('sessionId', String(sid));
-        if (roleInput) localStorage.setItem('userRole', normalizeUserRole(roleInput));
-      } catch {
-        // ignore storage restrictions
-      }
-      setAuthCheckTick((n) => n + 1);
+      (async () => {
+        try {
+          const normalizedToken = await normalizeIncomingLaunchToken(token);
+          if (!normalizedToken) return;
+          await setSessionTokenSecure(normalizedToken);
+          if (sid != null) await setSessionIdSecure(String(sid));
+          if (roleInput) localStorage.setItem('userRole', normalizeUserRole(roleInput));
+        } catch {
+          // ignore storage restrictions
+        }
+        setAuthCheckTick((n) => n + 1);
+      })();
     };
 
     window.addEventListener('message', onSessionMessage);
@@ -281,18 +511,21 @@ const App: React.FC = () => {
         // Step 1: If launch token exists in URL, store it first in sessionStorage.
         if (launchToken) {
           try {
-            sessionStorage.setItem('sessionToken', launchToken);
+            const normalizedToken = await normalizeIncomingLaunchToken(launchToken);
+            if (normalizedToken) {
+              await setSessionTokenSecure(normalizedToken);
+            }
           } catch {
             // ignore storage restrictions
           }
-          const cleanUrl = `${window.location.pathname}${window.location.hash || ''}`;
+          const cleanUrl = getSanitizedUrlWithoutLaunchToken();
           window.history.replaceState({}, document.title, cleanUrl);
         }
 
         // Step 2: Always read token from sessionStorage, then verify using that token.
         let storedSessionToken = '';
         try {
-          storedSessionToken = sessionStorage.getItem('sessionToken') || '';
+          storedSessionToken = await getSessionTokenSecure();
         } catch {
           // ignore storage restrictions
         }
@@ -305,7 +538,7 @@ const App: React.FC = () => {
             setHasValidSession(true);
             try {
               localStorage.setItem('userRole', resolvedRole);
-              sessionStorage.setItem('sessionId', String(sessionData.session.s_ID));
+              await setSessionIdSecure(String(sessionData.session.s_ID));
             } catch {
               // ignore
             }
@@ -321,9 +554,9 @@ const App: React.FC = () => {
             try {
               localStorage.setItem('userRole', resolvedRole);
               if (launchData.session?.s_name) {
-                sessionStorage.setItem('sessionToken', String(launchData.session.s_name));
+                await setSessionTokenSecure(String(launchData.session.s_name));
               }
-              sessionStorage.setItem('sessionId', String(launchData.session.s_ID));
+              await setSessionIdSecure(String(launchData.session.s_ID));
             } catch {
               // ignore
             }
@@ -336,8 +569,10 @@ const App: React.FC = () => {
           setHasValidSession(false);
           if (shouldClearInvalidSession()) {
             try {
-              sessionStorage.removeItem('sessionToken');
-              sessionStorage.removeItem('sessionId');
+              sessionStorage.removeItem(SESSION_TOKEN_ENC_KEY);
+              sessionStorage.removeItem(SESSION_ID_ENC_KEY);
+              sessionStorage.removeItem(SESSION_TOKEN_LEGACY_KEY);
+              sessionStorage.removeItem(SESSION_ID_LEGACY_KEY);
               localStorage.removeItem('userRole');
             } catch {
               // ignore
@@ -360,8 +595,10 @@ const App: React.FC = () => {
     setHasValidSession(false);
     try {
       localStorage.removeItem('userRole');
-      sessionStorage.removeItem('sessionToken');
-      sessionStorage.removeItem('sessionId');
+      sessionStorage.removeItem(SESSION_TOKEN_ENC_KEY);
+      sessionStorage.removeItem(SESSION_ID_ENC_KEY);
+      sessionStorage.removeItem(SESSION_TOKEN_LEGACY_KEY);
+      sessionStorage.removeItem(SESSION_ID_LEGACY_KEY);
     } catch (e) {
       console.warn("Could not clear auth state", e);
     }

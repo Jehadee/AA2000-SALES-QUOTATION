@@ -1,6 +1,5 @@
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import type { CustomerInfo, SelectedItem } from '../types';
 
 export const generateQuotationPDF = async (element: HTMLElement, filename: string): Promise<Blob> => {
   if (!element) {
@@ -182,48 +181,4 @@ export const blobToBase64 = (blob: Blob): Promise<string> => {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
-};
-
-export const generatePipelineUploadPdf = (
-  quoteId: string,
-  customer: CustomerInfo,
-  items: SelectedItem[],
-  total: number
-): Blob => {
-  const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
-  const now = new Date().toLocaleString();
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14);
-  doc.text('AA2000 Quotation Record', 14, 16);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-  doc.text(`Reference: ${quoteId}`, 14, 24);
-  doc.text(`Generated: ${now}`, 14, 30);
-  doc.text(`Client: ${customer.fullName || '-'}`, 14, 36);
-  doc.text(`Company: ${customer.companyName || '-'}`, 14, 42);
-  doc.text(`Email: ${customer.email || '-'}`, 14, 48);
-  doc.text(`Phone: ${customer.phone || '-'}`, 14, 54);
-  doc.text(`Project: ${customer.projectFor || '-'}`, 14, 60);
-
-  doc.setFont('helvetica', 'bold');
-  doc.text('Items', 14, 70);
-
-  let y = 76;
-  doc.setFont('helvetica', 'normal');
-  items.slice(0, 20).forEach((it, idx) => {
-    const line = `${idx + 1}. ${it.model || '-'} | ${it.name || '-'} | Qty: ${it.quantity} | Unit: PHP ${it.price.toLocaleString()}`;
-    doc.text(line, 14, y);
-    y += 6;
-  });
-  if (items.length > 20) {
-    doc.text(`... ${items.length - 20} more item(s) not shown`, 14, y);
-    y += 6;
-  }
-
-  doc.setFont('helvetica', 'bold');
-  doc.text(`Grand Total: PHP ${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 14, y + 8);
-
-  return doc.output('blob');
 };

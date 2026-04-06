@@ -14,9 +14,9 @@ import AdminPanel from './AdminPanel';
 import ExcelImporter from './ExcelImporter';
 import AIChat from './AIChat';
 import { sendQuotationEmail } from '../services/emailService';
-import { blobToBase64, generatePipelineUploadPdf } from '../services/pdfService';
+import { blobToBase64 } from '../services/pdfService';
 import { addCustomer } from '../services/customerApi';
-import { uploadQuotationFile } from '../services/quotationFileApi';
+import { triggerPipelineUploadHook, uploadQuotationFile } from '../services/quotationFileApi';
 import { fetchProducts } from '../services/productsApi';
 import { deriveTierPricesFromBasePrice } from '../services/pricing';
 import * as XLSX from 'xlsx';
@@ -746,16 +746,17 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
       attachments: [], version: 1,
       isDraft: false,
     };
-
-    try {
-      const uploadBlob = generatePipelineUploadPdf(newId, customer, items, finalTotal);
-      await uploadQuotationFile(uploadBlob, `Quotation_${newId}.pdf`);
-      showToast('Pipeline PDF uploaded to server storage.', 'success');
-    } catch (e: any) {
-      showToast(`Pipeline PDF upload failed: ${e?.message || 'Upload error'}`, 'error');
-    }
-
     await persistQuotes([newQuote, ...savedQuotes]);
+    try {
+      await triggerPipelineUploadHook({
+        quoteId: newQuote.id,
+        customerName: newQuote.customer.fullName || newQuote.customer.companyName,
+        total: newQuote.total,
+        createdAt: newQuote.createdAt,
+      });
+    } catch (e: any) {
+      showToast(`Pipeline upload trigger failed: ${e?.message || 'Server error'}`, 'error');
+    }
     showToast('Quote submitted. Customer saved to backend; quotation saved to pipeline.');
     setItems([]); setUploadedFiles([]); setCustomer(INITIAL_CUSTOMER);
     setDiscountValue(0); setDiscountType('percentage'); setCurrentStatus(QuotationStatus.INQUIRY); setActiveTab('pipeline');

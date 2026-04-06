@@ -5,6 +5,13 @@ export interface UploadQuotationResponse {
   filePath?: string;
 }
 
+export interface PipelineUploadTriggerPayload {
+  quoteId: string;
+  customerName?: string;
+  total?: number;
+  createdAt?: string;
+}
+
 function getUploadQuotationUrl(): string {
   const base = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? '';
   const override = (import.meta as any).env?.VITE_UPLOAD_QUOTATION_PATH as string | undefined;
@@ -52,5 +59,29 @@ export async function uploadQuotationFile(pdfBlob: Blob, fileName: string): Prom
   }
 
   return (typeof data === 'object' ? data : { message: String(data) }) as UploadQuotationResponse;
+}
+
+function getSubmitPipelineTriggerUrl(): string {
+  const base = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? '';
+  const override = (import.meta as any).env?.VITE_SUBMIT_PIPELINE_UPLOAD_PATH as string | undefined;
+  const baseClean = base.replace(/\/+$/, '');
+  if (override && override.trim()) {
+    const p = override.trim().startsWith('/') ? override.trim() : `/${override.trim()}`;
+    return `${baseClean}${p}`;
+  }
+  return `${baseClean}/service/quotation/post/upload/qoutationFile`;
+}
+
+export async function triggerPipelineUploadHook(payload: PipelineUploadTriggerPayload): Promise<void> {
+  const url = getSubmitPipelineTriggerUrl();
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(txt || `Pipeline upload trigger failed (${res.status})`);
+  }
 }
 

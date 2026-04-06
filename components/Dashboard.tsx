@@ -218,9 +218,53 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
       const files = await fetchEstimationFiles();
       setEstimationFiles(files);
     } catch (e: any) {
-      setEstimationError(e?.message || 'Failed to load estimation files');
+      const msg = e?.message || 'Failed to load estimation files';
+      setEstimationError(msg);
+      showToast(msg, 'error');
     } finally {
       setIsLoadingEstimations(false);
+    }
+  }, []);
+
+  const handleDownloadEstimationFile = useCallback(async (file: EstimationFileRecord) => {
+    try {
+      showToast(`Downloading ${file.filename}...`, 'info');
+      const res = await fetch(file.fileUrl, { method: 'GET' });
+      if (!res.ok) throw new Error(`Download failed (${res.status})`);
+
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = file.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+      showToast(`Downloaded ${file.filename}`, 'success');
+    } catch (e: any) {
+      const msg = e?.message || 'Failed to download file';
+      setEstimationError(msg);
+      showToast(msg, 'error');
+      // Fallback: open in new tab (server may already send attachment disposition).
+      try {
+        const a = document.createElement('a');
+        a.href = file.fileUrl;
+        a.target = '_blank';
+        a.rel = 'noreferrer';
+        a.download = file.filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } catch {
+        try {
+          window.open(file.fileUrl, '_blank', 'noreferrer');
+        } catch {
+          // ignore
+        }
+      }
     }
   }, []);
 
@@ -1091,7 +1135,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                       <th className="px-6 py-4 first:rounded-l-xl">File Name</th>
                       <th className="px-6 py-4">Type</th>
                       <th className="px-6 py-4">Saved</th>
-                      <th className="px-6 py-4">Preview</th>
+                      <th className="px-6 py-4">Download</th>
                       <th className="px-6 py-4 last:rounded-r-xl">Action</th>
                     </tr>
                   </thead>
@@ -1115,14 +1159,13 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                             {f.createdAt ? new Date(f.createdAt).toLocaleString() : '-'}
                           </td>
                           <td className="px-6 py-5">
-                            <a
-                              href={f.fileUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex items-center text-xs font-bold text-indigo-600 hover:underline"
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadEstimationFile(f)}
+                              className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-[10px] font-bold uppercase tracking-wider hover:bg-indigo-500"
                             >
-                              Open File
-                            </a>
+                              Download
+                            </button>
                           </td>
                           <td className="px-6 py-5">
                             <button

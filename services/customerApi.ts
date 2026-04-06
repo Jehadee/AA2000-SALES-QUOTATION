@@ -23,7 +23,7 @@ export type CustomerDirectoryItem = {
   fname: string;
   mname: string;
   lname: string;
-  email: string;
+  email: string; 
   phone: string;
   companyName: string;
   address: string;

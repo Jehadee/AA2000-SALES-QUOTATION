@@ -7,6 +7,7 @@ export interface Product {
   name: string;
   description: string;
   brand: string;
+  imageUrl?: string;
   baseCost: number; // The internal purchase cost before markup
   price: number; // The default selling price
   category?: string;

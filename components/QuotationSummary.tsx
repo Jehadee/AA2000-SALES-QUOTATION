@@ -22,7 +22,6 @@ interface Props {
   isValid: boolean;
   onPreview: () => void;
   onSubmit: () => Promise<void>;
-  onSaveDraft: () => Promise<void>;
   onSendEmail: () => Promise<void>;
   clientType?: ClientType;
   pdfFileName: string;
@@ -50,7 +49,6 @@ const QuotationSummary: React.FC<Props> = React.memo(({
   isValid,
   onPreview,
   onSubmit,
-  onSaveDraft,
   onSendEmail,
   clientType = ClientType.END_USER,
   pdfFileName,
@@ -59,7 +57,6 @@ const QuotationSummary: React.FC<Props> = React.memo(({
   onReferenceCodeChange
 }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSavingDraft, setIsSavingDraft] = useState(false);
 
   const totalQty = useMemo(() => items.reduce((sum, i) => sum + i.quantity, 0), [items]);
 
@@ -84,16 +81,6 @@ const QuotationSummary: React.FC<Props> = React.memo(({
       await onSubmit();
     } finally {
       setIsSubmitting(false);
-    }
-  };
-
-  const handleSaveDraftClick = async () => {
-    if (!isValid || isSavingDraft) return;
-    setIsSavingDraft(true);
-    try {
-      await onSaveDraft();
-    } finally {
-      setIsSavingDraft(false);
     }
   };
 
@@ -355,15 +342,15 @@ const QuotationSummary: React.FC<Props> = React.memo(({
             </button>
             <button
               type="button"
-              onClick={handleSaveDraftClick}
-              disabled={!isValid || isSavingDraft}
+              onClick={handleSubmitClick}
+              disabled={!isValid || isSubmitting}
               className={`py-3 px-3 font-bold text-[10px] rounded-xl border transition-all flex items-center justify-center gap-2 active:scale-95 uppercase tracking-wider ${
-                isValid && !isSavingDraft
-                  ? 'bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100'
+                isValid && !isSubmitting
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900 hover:bg-emerald-100'
                   : 'bg-slate-100 text-slate-400 border-slate-100 shadow-none'
               }`}
             >
-              {isSavingDraft ? 'Saving…' : 'Save to Draft Inbox'}
+              {isSubmitting ? 'Processing...' : 'Submit to Pipeline'}
             </button>
             <button onClick={handleSubmitClick} disabled={!isValid || isSubmitting} className={`col-span-2 py-3 px-3 font-bold text-[10px] rounded-xl shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center gap-2 active:scale-95 uppercase tracking-wider ${isValid && !isSubmitting ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-slate-100 text-slate-400 shadow-none'}`}>
               {isSubmitting ? 'Processing...' : 'Submit to Pipeline'}

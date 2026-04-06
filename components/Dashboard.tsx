@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, Inbox, PanelLeftClose, PanelLeft } from 'lucide-react';
+import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, PanelLeftClose, PanelLeft } from 'lucide-react';
 import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile } from '../types';
 import { PRODUCTS, COMPANY_DETAILS, DEFAULT_PDF_TEMPLATE, INITIAL_CUSTOMER } from '../constants';
 import { processConversation } from '../services/geminiService';
@@ -16,6 +16,7 @@ import AIChat from './AIChat';
 import { sendQuotationEmail } from '../services/emailService';
 import { blobToBase64 } from '../services/pdfService';
 import { addCustomer } from '../services/customerApi';
+import { uploadQuotationFile } from '../services/quotationFileApi';
 import { fetchProducts } from '../services/productsApi';
 import { deriveTierPricesFromBasePrice } from '../services/pricing';
 import * as XLSX from 'xlsx';
@@ -43,7 +44,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   const [discountType, setDiscountType] = useState<'percentage' | 'fixed'>('percentage');
   const [showVat, setShowVat] = useState<boolean>(true);
   const [currentStatus, setCurrentStatus] = useState<QuotationStatus>(QuotationStatus.INQUIRY);
-  const [activeTab, setActiveTab] = useState<'estimation' | 'quotation' | 'draft' | 'pipeline' | 'admin'>('estimation');
+  const [activeTab, setActiveTab] = useState<'estimation' | 'quotation' | 'pipeline' | 'admin'>('estimation');
   
   const [messages, setMessages] = useState<Message[]>([
     { role: 'model', content: "Hello! I'm your AA2000 Sales Assistant. I can help you build quotations faster. Just tell me what products you need, or upload a photo of a hand-written BOM or an Excel file!" }
@@ -65,7 +66,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   
   const [pipelineSearch, setPipelineSearch] = useState('');
   const [pipelineStatusFilter, setPipelineStatusFilter] = useState<QuotationStatus | 'ALL'>('ALL');
-  const [draftSearch, setDraftSearch] = useState('');
   const [estimationFiles, setEstimationFiles] = useState<EstimationFileRecord[]>([]);
   const [isLoadingEstimations, setIsLoadingEstimations] = useState(false);
   const [estimationError, setEstimationError] = useState<string | null>(null);
@@ -570,6 +570,17 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     if (currentStatus === QuotationStatus.INQUIRY) setCurrentStatus(QuotationStatus.REQUIREMENTS);
   }, [customer.clientType, getPriceForClient, currentStatus]);
 
+  const handleCreateQuickProduct = useCallback(async (product: Product) => {
+    const exists = dynamicProducts.some(
+      (p) => p.model.toLowerCase() === product.model.toLowerCase() || p.id === product.id
+    );
+    if (exists) {
+      throw new Error(`Product with model "${product.model}" already exists.`);
+    }
+    await persistCatalog([...dynamicProducts, product]);
+    showToast(`Added new product: ${product.model}`, 'success');
+  }, [dynamicProducts]);
+
   const removeUploadedFile = useCallback((fileId: string) => {
     setUploadedFiles(prev => prev.filter(f => f.id !== fileId));
     setItems(prev => prev.filter(item => item.sourceFileId !== fileId));
@@ -741,53 +752,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     setDiscountValue(0); setDiscountType('percentage'); setCurrentStatus(QuotationStatus.INQUIRY); setActiveTab('pipeline');
   };
 
-  const handleSaveDraft = async () => {
-    if (!isFormValid || items.length === 0) return;
-
-    const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
-    const laborCost = customer.hasLabor ? (customer.laborCost || 0) : 0;
-    const discountAmount = discountType === 'percentage' ? (subtotal * (discountValue / 100)) : discountValue;
-    const netTotal = subtotal - discountAmount + laborCost;
-    const vat = netTotal * 0.12;
-    const finalTotal = showVat ? netTotal + vat : netTotal;
-
-    let baseId = previewId.trim() || `PQ-${Date.now().toString().slice(-6)}`;
-    if (savedQuotes.some((q) => q.id === baseId)) {
-      baseId = `PQ-${Date.now().toString().slice(-6)}`;
-    }
-
-    const newQuote: QuotationRecord = {
-      id: baseId,
-      items: [...items],
-      laborServices: [...laborServices],
-      customer: { ...customer },
-      paymentMethod,
-      discountPercent: discountType === 'percentage' ? discountValue : 0,
-      discountType,
-      discountValue,
-      showVat,
-      status: QuotationStatus.REVIEW,
-      total: finalTotal,
-      createdAt: new Date().toISOString(),
-      logs: [{ date: new Date().toISOString(), note: 'Saved to Draft Inbox.', user: 'Staff' }],
-      attachments: [],
-      version: 1,
-      isDraft: true,
-    };
-    await persistQuotes([newQuote, ...savedQuotes]);
-    showToast('Saved to Draft Inbox. Review, email, or move to pipeline when ready.');
-    setItems([]);
-    setUploadedFiles([]);
-    setLaborServices([]);
-    setCustomer(INITIAL_CUSTOMER);
-    setDiscountValue(0);
-    setDiscountType('percentage');
-    setCurrentStatus(QuotationStatus.INQUIRY);
-    setPreviewId(`PQ-FDAS-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`);
-    setPdfFileName('');
-    setActiveTab('draft');
-  };
-
   const handlePromoteFromDraft = (id: string) => {
     persistQuotes(
       savedQuotes.map((q) =>
@@ -919,6 +883,16 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     }
   };
 
+  const handlePersistPdf = useCallback(async (pdfBlob: Blob, fileName: string) => {
+    try {
+      await uploadQuotationFile(pdfBlob, fileName);
+      showToast('Quotation PDF uploaded to server storage.', 'success');
+    } catch (e: any) {
+      showToast(`PDF upload failed: ${e?.message || 'Server upload error'}`, 'error');
+      throw e;
+    }
+  }, []);
+
   const subtotal = useMemo(() => items.reduce((sum, i) => sum + i.price * i.quantity, 0), [items]);
   const laborCost = useMemo(() => customer.hasLabor ? (customer.laborCost || 0) : 0, [customer.hasLabor, customer.laborCost]);
   
@@ -937,8 +911,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   // The grand total is the Net amount plus VAT (if enabled)
   const grandTotal = useMemo(() => showVat ? netTotal + vatAmount : netTotal, [showVat, netTotal, vatAmount]);
 
-  const pipelineQuotes = useMemo(() => savedQuotes.filter((q) => !q.isDraft), [savedQuotes]);
-  const draftQuotes = useMemo(() => savedQuotes.filter((q) => q.isDraft), [savedQuotes]);
+  const pipelineQuotes = useMemo(() => savedQuotes, [savedQuotes]);
 
   const recentQuotationHistory = useMemo(() => {
     const entries: { quoteId: string; note: string; date: string; user: string }[] = [];
@@ -1022,19 +995,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                 </button>
 
                 <button
-                  onClick={() => setActiveTab('draft')}
-                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'draft' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
-                >
-                  <div className={`p-2 rounded-lg transition-colors ${activeTab === 'draft' ? 'bg-amber-500/10 text-amber-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
-                    <Inbox size={18} />
-                  </div>
-                  <div className="text-left">
-                    <span className="block font-bold">Draft Inbox</span>
-                    <span className="block text-[10px] opacity-60 font-normal mt-0.5">REVIEW BEFORE SEND</span>
-                  </div>
-                </button>
-
-                <button
                   onClick={() => setActiveTab('pipeline')}
                   className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'pipeline' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                 >
@@ -1107,19 +1067,27 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
         {activeTab === 'estimation' && (
           <div className="p-8 max-w-7xl mx-auto min-h-full">
             <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm min-h-[80vh]">
-              <div className="flex flex-col md:flex-row items-center justify-between gap-4 mb-8">
+              <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
                 <div>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Workspace</p>
                   <h2 className="text-2xl font-black text-slate-900">Estimation Inbox</h2>
+                  <p className="mt-2 text-sm text-slate-500 max-w-2xl">
+                    Review incoming estimation files, download originals, and start drafting a quotation in one click.
+                  </p>
                 </div>
-                <button
-                  onClick={loadEstimationInbox}
-                  disabled={isLoadingEstimations}
-                  className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-wider text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  <RefreshCw size={14} className={isLoadingEstimations ? 'animate-spin' : ''} />
-                  Refresh Files
-                </button>
+                <div className="flex items-center gap-3">
+                  <div className="px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                    {estimationFiles.length} {estimationFiles.length === 1 ? 'File' : 'Files'}
+                  </div>
+                  <button
+                    onClick={loadEstimationInbox}
+                    disabled={isLoadingEstimations}
+                    className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-wider text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    <RefreshCw size={14} className={isLoadingEstimations ? 'animate-spin' : ''} />
+                    Refresh
+                  </button>
+                </div>
               </div>
 
               {estimationError && (
@@ -1128,19 +1096,25 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                 </div>
               )}
 
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto rounded-2xl border border-slate-200">
                 <table className="w-full text-left border-collapse">
-                  <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-500 border-y border-slate-100">
+                  <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-500 border-b border-slate-200">
                     <tr>
-                      <th className="px-6 py-4 first:rounded-l-xl">File Name</th>
+                      <th className="px-6 py-4">File Name</th>
                       <th className="px-6 py-4">Type</th>
                       <th className="px-6 py-4">Saved</th>
                       <th className="px-6 py-4">Download</th>
-                      <th className="px-6 py-4 last:rounded-r-xl">Action</th>
+                      <th className="px-6 py-4">Action</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {!isLoadingEstimations && estimationFiles.length === 0 ? (
+                  <tbody className="divide-y divide-slate-100">
+                    {isLoadingEstimations && estimationFiles.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="text-center py-16 text-slate-400 text-sm font-medium">
+                          Loading estimation files...
+                        </td>
+                      </tr>
+                    ) : estimationFiles.length === 0 ? (
                       <tr>
                         <td colSpan={5} className="text-center py-16 text-slate-400 text-sm font-medium">
                           No estimation files found.
@@ -1150,19 +1124,21 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                       estimationFiles.map((f) => (
                         <tr key={f.filename} className="hover:bg-slate-50 transition-colors">
                           <td className="px-6 py-5">
-                            <div className="font-bold text-slate-900 text-sm">{f.filename}</div>
+                            <div className="font-bold text-slate-900 text-sm break-all">{f.filename}</div>
                           </td>
-                          <td className="px-6 py-5 text-sm font-medium text-slate-600">
-                            {f.isPdf ? 'PDF' : f.isDocx ? 'DOCX' : (f.extension ? f.extension.toUpperCase() : 'FILE')}
+                          <td className="px-6 py-5">
+                            <span className="inline-flex px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-slate-100 text-slate-700">
+                              {f.isPdf ? 'PDF' : f.isDocx ? 'DOCX' : (f.extension ? f.extension.toUpperCase() : 'FILE')}
+                            </span>
                           </td>
-                          <td className="px-6 py-5 text-xs text-slate-500">
+                          <td className="px-6 py-5 text-xs text-slate-500 whitespace-nowrap">
                             {f.createdAt ? new Date(f.createdAt).toLocaleString() : '-'}
                           </td>
                           <td className="px-6 py-5">
                             <button
                               type="button"
                               onClick={() => handleDownloadEstimationFile(f)}
-                              className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-[10px] font-bold uppercase tracking-wider hover:bg-indigo-500"
+                              className="px-3 py-2 rounded-lg bg-slate-900 text-white text-[10px] font-bold uppercase tracking-wider hover:bg-slate-800"
                             >
                               Download
                             </button>
@@ -1226,7 +1202,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
               {recentQuotationHistory.length > 0 && (
                 <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm p-6">
                   <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Quotation history</h3>
-                  <p className="text-xs text-slate-500 mb-4">Latest activity across drafts and pipeline (newest first).</p>
+                  <p className="text-xs text-slate-500 mb-4">Latest quotation activity (newest first).</p>
                   <ul className="divide-y divide-slate-100 max-h-56 overflow-y-auto custom-scrollbar">
                     {recentQuotationHistory.map((e, i) => (
                       <li key={`${e.quoteId}-${e.date}-${i}`} className="py-3 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1 text-xs">
@@ -1298,7 +1274,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                       </div>
                     </div>
 
-                    <ProductList products={dynamicProducts} onAdd={addItem} />
+                    <ProductList products={dynamicProducts} onAdd={addItem} onCreateProduct={handleCreateQuickProduct} />
 
                     <QuotationSummary
                       items={items}
@@ -1323,7 +1299,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                       onReferenceCodeChange={setPreviewId}
                       onPreview={() => { setIsPreviewOpen(true); }}
                       onSubmit={handleSubmitPipeline}
-                      onSaveDraft={handleSaveDraft}
                       onSendEmail={async () => { setIsPreviewOpen(true); }}
                       clientType={customer.clientType}
                     />
@@ -1373,7 +1348,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
 
                 <div className="flex flex-col gap-8">
                    <div className="w-full space-y-8">
-                      <ProductList products={dynamicProducts} onAdd={addItem} />
+                      <ProductList products={dynamicProducts} onAdd={addItem} onCreateProduct={handleCreateQuickProduct} />
                    </div>
                    <div className="w-full">
                       <QuotationSummary 
@@ -1399,7 +1374,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                         onReferenceCodeChange={setPreviewId}
                         onPreview={() => { setIsPreviewOpen(true); }} 
                         onSubmit={handleSubmitPipeline} 
-                        onSaveDraft={handleSaveDraft}
                         onSendEmail={async () => { setIsPreviewOpen(true); }} 
                         clientType={customer.clientType}
                       />
@@ -1408,91 +1382,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
               </div>
               </>
               )}
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'draft' && (
-          <div className="p-8 max-w-7xl mx-auto min-h-full">
-            <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm min-h-[80vh]">
-              <div className="flex flex-col md:flex-row items-center justify-between gap-4 mb-8">
-                <div>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Staging</p>
-                  <h2 className="text-2xl font-black text-slate-900">Draft Inbox</h2>
-                  <p className="text-sm text-slate-500 mt-2 max-w-xl">
-                    Quotations saved from Quotation Studio appear here. Open one to review the PDF, send email to the customer, or add it to the active pipeline.
-                  </p>
-                </div>
-                <div className="group flex items-center bg-white border border-slate-200 rounded-2xl px-4 py-3 w-full md:w-72 focus-within:ring-2 focus-within:ring-amber-500/20 focus-within:border-amber-500 transition-all shadow-sm">
-                  <Search className="text-slate-400 group-focus-within:text-amber-600 transition-colors mr-3 shrink-0" size={18} />
-                  <input
-                    type="text"
-                    placeholder="Search drafts..."
-                    value={draftSearch}
-                    onChange={(e) => setDraftSearch(e.target.value)}
-                    className="bg-transparent border-none outline-none text-sm font-medium w-full placeholder:text-slate-400 text-slate-700 h-full p-0"
-                  />
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-500 border-y border-slate-100">
-                    <tr>
-                      <th className="px-6 py-4 first:rounded-l-xl">Quote ID</th>
-                      <th className="px-6 py-4">Recipient</th>
-                      <th className="px-6 py-4">Project</th>
-                      <th className="px-6 py-4">Total Value</th>
-                      <th className="px-6 py-4">Saved</th>
-                      <th className="px-6 py-4 last:rounded-r-xl">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {draftQuotes.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="text-center py-16 text-slate-400 text-sm font-medium">
-                          No drafts yet. Use &quot;Save to Draft Inbox&quot; in Quotation Studio.
-                        </td>
-                      </tr>
-                    ) : (
-                      draftQuotes
-                        .filter(
-                          (q) =>
-                            q.id.toLowerCase().includes(draftSearch.toLowerCase()) ||
-                            q.customer.fullName.toLowerCase().includes(draftSearch.toLowerCase())
-                        )
-                        .map((q) => (
-                          <tr
-                            key={q.id}
-                            className="hover:bg-amber-50/40 cursor-pointer transition-colors group"
-                            onClick={() => setSelectedQuoteId(q.id)}
-                          >
-                            <td className="px-6 py-5">
-                              <span className="font-bold text-amber-800 bg-amber-50 px-3 py-1.5 rounded-lg text-xs">{q.id}</span>
-                            </td>
-                            <td className="px-6 py-5">
-                              <div className="font-bold text-slate-900 text-sm">{q.customer.fullName}</div>
-                              <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mt-0.5">{q.customer.companyName}</div>
-                            </td>
-                            <td className="px-6 py-5 text-sm font-medium text-slate-600">{q.customer.projectFor}</td>
-                            <td className="px-6 py-5 font-bold text-slate-900 text-sm">₱{q.total.toLocaleString()}</td>
-                            <td className="px-6 py-5 text-xs text-slate-500">{new Date(q.createdAt).toLocaleString()}</td>
-                            <td className="px-6 py-5">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  persistQuotes(savedQuotes.filter((x) => x.id !== q.id));
-                                }}
-                                className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                              >
-                                <Trash2 size={18} />
-                              </button>
-                            </td>
-                          </tr>
-                        ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
             </div>
           </div>
         )}
@@ -1652,6 +1541,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
         showVat={showVat}
         existingQuoteId={previewId} 
         onSendEmail={handleEmailAction} 
+        onPersistPdf={handlePersistPdf}
         template={pdfTemplate}
         customFileName={pdfFileName}
         onCustomFileNameChange={setPdfFileName}

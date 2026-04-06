@@ -16,6 +16,7 @@ interface Props {
   total: number;
   showVat: boolean;
   onSendEmail: (pdfBlob: Blob) => Promise<void>;
+  onPersistPdf?: (pdfBlob: Blob, fileName: string) => Promise<void>;
   existingQuoteId?: string;
   template: PDFTemplate;
   customFileName: string;
@@ -24,7 +25,7 @@ interface Props {
 
 const PreviewModal: React.FC<Props> = ({ 
   isOpen, onClose, items, customer, paymentMethod, subtotal, laborCost = 0, vat, discountAmount, total, showVat, onSendEmail, existingQuoteId, template,
-  customFileName, onCustomFileNameChange
+  customFileName, onCustomFileNameChange, onPersistPdf
 }) => {
   const printRef = useRef<HTMLDivElement>(null);
   const [isExporting, setIsExporting] = useState(false);
@@ -68,6 +69,13 @@ const PreviewModal: React.FC<Props> = ({
     try {
       const filename = customFileName.endsWith('.pdf') ? customFileName : `${customFileName}.pdf`;
       const pdfBlob = await generateQuotationPDF(printRef.current, filename);
+      if (onPersistPdf) {
+        try {
+          await onPersistPdf(pdfBlob, filename);
+        } catch (err) {
+          console.warn('PDF saved locally but upload failed:', err);
+        }
+      }
       const link = document.createElement('a');
       link.href = URL.createObjectURL(pdfBlob);
       link.download = filename;
@@ -87,6 +95,13 @@ const PreviewModal: React.FC<Props> = ({
     try {
       const filename = customFileName.endsWith('.pdf') ? customFileName : `${customFileName}.pdf`;
       const pdfBlob = await generateQuotationPDF(printRef.current, filename);
+      if (onPersistPdf) {
+        try {
+          await onPersistPdf(pdfBlob, filename);
+        } catch (err) {
+          console.warn('Email will continue but PDF upload failed:', err);
+        }
+      }
       await onSendEmail(pdfBlob);
       onClose(); 
     } catch (err) {

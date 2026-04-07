@@ -997,40 +997,31 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                     </div>
 
                     <div className="flex flex-col items-center gap-1 w-full min-w-0">
-                      {(() => {
-                        const { brand: phBrand, tagline: phTag } = getPdfHeaderLines(pdfTemplate.companyInfo);
-                        return (
-                          <>
-                            <input
-                              type="text"
-                              value={pdfTemplate.companyInfo.brandName ?? ''}
-                              onChange={(e) => handleUpdateTemplateField('companyInfo.brandName', e.target.value)}
-                              placeholder={phBrand}
-                              style={{
-                                fontSize: `${pdfTemplate.companyInfo.companyNameStyle?.fontSize || 22}pt`,
-                                color: pdfTemplate.companyInfo.companyNameStyle?.color || '#004a8d',
-                                fontWeight: pdfTemplate.companyInfo.companyNameStyle?.fontWeight || '900',
-                                fontFamily: pdfTemplate.companyInfo.companyNameStyle?.fontFamily || 'Inter',
-                                fontStyle: pdfTemplate.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
-                              }}
-                              className="w-full bg-transparent border-b border-dashed border-slate-200 hover:border-indigo-300 focus:border-indigo-500 outline-none uppercase leading-none tracking-tight text-center"
-                            />
-                            <input
-                              type="text"
-                              value={pdfTemplate.companyInfo.tagline ?? ''}
-                              onChange={(e) => handleUpdateTemplateField('companyInfo.tagline', e.target.value)}
-                              placeholder={phTag || 'Tagline'}
-                              className="w-full bg-transparent border-b border-dashed border-slate-200 hover:border-indigo-300 focus:border-indigo-500 outline-none text-[9pt] font-semibold italic text-black leading-snug text-center"
-                            />
-                          </>
-                        );
-                      })()}
+                      <input
+                        type="text"
+                        value={pdfTemplate.companyInfo.brandName ?? ''}
+                        onChange={(e) => handleUpdateTemplateField('companyInfo.brandName', e.target.value)}
+                        placeholder={getPdfHeaderLines(pdfTemplate.companyInfo).brand}
+                        style={{
+                          fontSize: `${pdfTemplate.companyInfo.companyNameStyle?.fontSize || 22}pt`,
+                          color: pdfTemplate.companyInfo.companyNameStyle?.color || '#004a8d',
+                          fontWeight: pdfTemplate.companyInfo.companyNameStyle?.fontWeight || '900',
+                          fontFamily: pdfTemplate.companyInfo.companyNameStyle?.fontFamily || 'Inter',
+                          fontStyle: pdfTemplate.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
+                        }}
+                        className="w-full bg-transparent border-b border-dashed border-slate-200 hover:border-indigo-300 focus:border-indigo-500 outline-none uppercase leading-none tracking-tight text-center"
+                      />
+                      {!pdfTemplate.companyInfo.logoUrl && (
+                        <p className="text-[8pt] font-medium italic text-slate-500 text-center">
+                          Upload image logo here directly
+                        </p>
+                      )}
                       <textarea
                         value={pdfTemplate.companyInfo.name}
                         onChange={(e) => handleUpdateTemplateField('companyInfo.name', e.target.value)}
                         className="w-full mt-0.5 bg-slate-50/80 rounded px-1 py-0.5 border border-transparent hover:border-slate-200 focus:border-indigo-400 outline-none text-[7pt] font-bold uppercase text-slate-500 leading-tight text-center resize-none"
                         rows={2}
-                        title="Full legal name (used when tagline fields are empty)"
+                        title="Full legal company name"
                       />
                     </div>
                   </div>

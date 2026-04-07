@@ -50,7 +50,6 @@ export const DEFAULT_PDF_TEMPLATE: PDFTemplate = {
   companyInfo: {
     name: "AA2000 Security and Technology Solutions Inc.",
     brandName: "AA2000",
-    tagline: "Security and Technology Solutions Inc.",
     address:
       "UNIT 2C NORKIS BUILDING 11 CALBAYOG ST. COR.\nLIBERTAD, HIGHWAY HILLS, MANDALUYONG CITY,\nPHILIPPINES 1550",
     phone: "(02) 8571-56-93; 7155-7010",

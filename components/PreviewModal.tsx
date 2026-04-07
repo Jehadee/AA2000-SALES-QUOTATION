@@ -38,8 +38,8 @@ const PreviewModal: React.FC<Props> = ({
     return 'PQ-FDAS-' + new Date().getFullYear() + '-' + Date.now().toString().slice(-3);
   }, [existingQuoteId]);
 
-  const { brand: pdfHeaderBrand, tagline: pdfHeaderTagline } = React.useMemo(
-    () => getPdfHeaderLines(template.companyInfo),
+  const pdfHeaderBrand = React.useMemo(
+    () => getPdfHeaderLines(template.companyInfo).brand,
     [template.companyInfo],
   );
 
@@ -225,42 +225,22 @@ const PreviewModal: React.FC<Props> = ({
                   )}
 
                   <div className="flex flex-col items-center gap-0.5 w-full min-w-0">
-                    {pdfHeaderTagline ? (
-                      <>
-                        <h1
-                          style={{
-                            fontSize: `${template.companyInfo.companyNameStyle?.fontSize ?? 22}pt`,
-                            color: template.companyInfo.companyNameStyle?.color || '#004a8d',
-                            fontWeight: template.companyInfo.companyNameStyle?.fontWeight || '900',
-                            fontFamily: template.companyInfo.companyNameStyle?.fontFamily || 'Inter',
-                            fontStyle: template.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
-                          }}
-                          className="tracking-tight leading-none uppercase whitespace-pre-wrap"
-                        >
-                          {pdfHeaderBrand}
-                        </h1>
-                        <p
-                          className="text-[9pt] font-semibold italic text-black leading-snug max-w-[95%]"
-                          style={{
-                            fontFamily: template.companyInfo.companyNameStyle?.fontFamily || 'Inter',
-                          }}
-                        >
-                          {pdfHeaderTagline}
-                        </p>
-                      </>
-                    ) : (
-                      <h1
-                        style={{
-                          fontSize: `${template.companyInfo.companyNameStyle?.fontSize ?? 22}pt`,
-                          color: template.companyInfo.companyNameStyle?.color || '#004a8d',
-                          fontWeight: template.companyInfo.companyNameStyle?.fontWeight || '900',
-                          fontFamily: template.companyInfo.companyNameStyle?.fontFamily || 'Inter',
-                          fontStyle: template.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
-                        }}
-                        className="tracking-tight leading-none uppercase whitespace-pre-wrap"
-                      >
-                        {template.companyInfo.name}
-                      </h1>
+                    <h1
+                      style={{
+                        fontSize: `${template.companyInfo.companyNameStyle?.fontSize ?? 22}pt`,
+                        color: template.companyInfo.companyNameStyle?.color || '#004a8d',
+                        fontWeight: template.companyInfo.companyNameStyle?.fontWeight || '900',
+                        fontFamily: template.companyInfo.companyNameStyle?.fontFamily || 'Inter',
+                        fontStyle: template.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
+                      }}
+                      className="tracking-tight leading-none uppercase whitespace-pre-wrap"
+                    >
+                      {pdfHeaderBrand}
+                    </h1>
+                    {!template.companyInfo.logoUrl && (
+                      <p className="text-[8pt] font-medium italic text-slate-500 leading-snug max-w-[95%] text-center">
+                        Upload image logo here directly
+                      </p>
                     )}
                   </div>
                 </div>

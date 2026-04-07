@@ -12,6 +12,7 @@ export interface AppState {
   discountPercent: number;
   discountType?: 'percentage' | 'fixed';
   discountValue?: number;
+  manualDiscountEnabled?: boolean;
   showVat: boolean;
   currentStatus: QuotationStatus;
   pdfFileName?: string;

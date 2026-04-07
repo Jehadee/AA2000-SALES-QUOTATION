@@ -13,6 +13,8 @@ interface Props {
   laborCost?: number;
   vat: number;
   discountAmount: number;
+  discountValue?: number;
+  discountType?: 'percentage' | 'fixed';
   total: number;
   showVat: boolean;
   onSendEmail: (pdfBlob: Blob) => Promise<void>;
@@ -21,13 +23,16 @@ interface Props {
   template: PDFTemplate;
   customFileName: string;
   onCustomFileNameChange: (name: string) => void;
+  headless?: boolean;
+  printRefOverride?: React.RefObject<HTMLDivElement | null>;
 }
 
 const PreviewModal: React.FC<Props> = ({ 
-  isOpen, onClose, items, customer, paymentMethod, subtotal, laborCost = 0, vat, discountAmount, total, showVat, onSendEmail, existingQuoteId, template,
-  customFileName, onCustomFileNameChange, onPersistPdf
+  isOpen, onClose, items, customer, paymentMethod, subtotal, laborCost = 0, vat, discountAmount, discountValue = 0, discountType = 'percentage', total, showVat, onSendEmail, existingQuoteId, template,
+  customFileName, onCustomFileNameChange, onPersistPdf, headless = false, printRefOverride
 }) => {
   const printRef = useRef<HTMLDivElement>(null);
+  const effectivePrintRef = printRefOverride ?? printRef;
   const [isExporting, setIsExporting] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [scale, setScale] = useState(1);
@@ -64,11 +69,11 @@ const PreviewModal: React.FC<Props> = ({
   }, [isOpen]);
 
   const handleDownload = async () => {
-    if (!printRef.current) return;
+    if (!effectivePrintRef.current) return;
     setIsExporting(true);
     try {
       const filename = customFileName.endsWith('.pdf') ? customFileName : `${customFileName}.pdf`;
-      const pdfBlob = await generateQuotationPDF(printRef.current, filename);
+      const pdfBlob = await generateQuotationPDF(effectivePrintRef.current, filename);
       if (onPersistPdf) {
         try {
           await onPersistPdf(pdfBlob, filename);
@@ -90,11 +95,11 @@ const PreviewModal: React.FC<Props> = ({
   };
 
   const handleSendEmail = async () => {
-    if (!printRef.current) return;
+    if (!effectivePrintRef.current) return;
     setIsSending(true);
     try {
       const filename = customFileName.endsWith('.pdf') ? customFileName : `${customFileName}.pdf`;
-      const pdfBlob = await generateQuotationPDF(printRef.current, filename);
+      const pdfBlob = await generateQuotationPDF(effectivePrintRef.current, filename);
       if (onPersistPdf) {
         try {
           await onPersistPdf(pdfBlob, filename);
@@ -111,17 +116,35 @@ const PreviewModal: React.FC<Props> = ({
     }
   };
 
-  if (!isOpen) return null;
+  // Keep PDF math aligned with dashboard overview calculation.
+  const effectiveDiscountAmount = React.useMemo(() => {
+    if (customer.clientType === ClientType.SYSTEM_CONTRACTOR) {
+      return subtotal * 0.2;
+    }
+    return discountType === 'percentage' ? subtotal * (discountValue / 100) : discountValue;
+  }, [customer.clientType, subtotal, discountType, discountValue]);
 
-  // Total after all deductions
-  const finalPayable = subtotal - discountAmount;
+  const effectiveNetTotal = React.useMemo(
+    () => subtotal - effectiveDiscountAmount + laborCost,
+    [subtotal, effectiveDiscountAmount, laborCost]
+  );
+  const effectiveVat = React.useMemo(
+    () => effectiveNetTotal * 0.12,
+    [effectiveNetTotal]
+  );
+  const effectiveGrandTotal = React.useMemo(
+    () => (showVat ? effectiveNetTotal + effectiveVat : effectiveNetTotal),
+    [showVat, effectiveNetTotal, effectiveVat]
+  );
+
+  if (!isOpen && !headless) return null;
   
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-0 sm:p-4">
-      <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md" onClick={onClose} />
+    <div className={headless ? "fixed -left-[200vw] top-0 z-[-1] pointer-events-none opacity-0" : "fixed inset-0 z-[200] flex items-center justify-center p-0 sm:p-4"}>
+      {!headless && <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md" onClick={onClose} />}
       
-      <div className="relative bg-white w-full max-w-5xl h-full sm:h-auto sm:max-h-[95vh] flex flex-col sm:rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
-        <div className="flex flex-col sm:flex-row items-center justify-between p-4 sm:p-6 border-b border-slate-100 bg-white sticky top-0 z-20 gap-4 sm:gap-0">
+      <div className={headless ? "relative bg-white" : "relative bg-white w-full max-w-5xl h-full sm:h-auto sm:max-h-[95vh] flex flex-col sm:rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300"}>
+        {!headless && <div className="flex flex-col sm:flex-row items-center justify-between p-4 sm:p-6 border-b border-slate-100 bg-white sticky top-0 z-20 gap-4 sm:gap-0">
           <div className="text-center sm:text-left">
             <h2 className="text-lg sm:text-xl font-black text-slate-900 uppercase tracking-tight">Document Preview</h2>
             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{quotationNo}</p>
@@ -152,17 +175,17 @@ const PreviewModal: React.FC<Props> = ({
               <svg className="w-6 h-6 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
-        </div>
+        </div>}
 
-        <div className="flex-1 overflow-auto p-4 sm:p-8 bg-slate-200 custom-scrollbar flex justify-center items-start">
+        <div className={headless ? "p-0 bg-transparent flex justify-center items-start" : "flex-1 overflow-auto p-4 sm:p-8 bg-slate-200 custom-scrollbar flex justify-center items-start"}>
           <div 
-            ref={printRef} 
+            ref={effectivePrintRef} 
             className="bg-white flex flex-col text-black relative shrink-0 shadow-lg origin-top overflow-hidden"
             style={{ 
               width: '215.9mm', 
               fontFamily: '"Inter", sans-serif',
-              transform: `scale(${scale})`,
-              marginBottom: scale < 1 ? `-${(1-scale) * 100}%` : '0', 
+              transform: headless ? 'scale(1)' : `scale(${scale})`,
+              marginBottom: headless ? '0' : (scale < 1 ? `-${(1-scale) * 100}%` : '0'), 
             }}
           >
             {/* PDF-HEADER — solid layers for html2canvas; ~41% brand column, separator, blue contact block */}
@@ -381,23 +404,23 @@ const PreviewModal: React.FC<Props> = ({
                         <td className="px-2 py-1 text-right">₱{laborCost.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                       </tr>
                     )}
-                    {discountAmount > 0 && (
+                    {effectiveDiscountAmount > 0 && (
                       <tr className="font-black text-red-600">
                         <td colSpan={5} className="border-r border-black px-2 py-1 text-right uppercase">
                           {customer.clientType === ClientType.SYSTEM_CONTRACTOR ? 'ADDITIONAL 20% CONTRACTORS DISCOUNT' : 'MANUAL DISCOUNT'}
                         </td>
-                        <td className="px-2 py-1 text-right">-₱{discountAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                        <td className="px-2 py-1 text-right">-₱{effectiveDiscountAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                       </tr>
                     )}
                     {showVat && (
                       <tr className="font-black text-indigo-600">
                         <td colSpan={5} className="border-r border-black px-2 py-1 text-right uppercase">ADD 12% VAT</td>
-                        <td className="px-2 py-1 text-right">+₱{vat.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                        <td className="px-2 py-1 text-right">+₱{effectiveVat.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                       </tr>
                     )}
                     <tr className="font-black bg-slate-200 border-t border-black">
                       <td colSpan={5} className="border-r border-black px-2 py-1 text-right uppercase text-[9pt]">GRAND TOTAL ({showVat ? 'VAT INCLUSIVE' : 'NET'})</td>
-                      <td className="px-2 py-1 text-right text-[9pt]">₱{total.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                      <td className="px-2 py-1 text-right text-[9pt]">₱{effectiveGrandTotal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -405,7 +428,7 @@ const PreviewModal: React.FC<Props> = ({
 
 
                 <div className="mt-2 text-[8pt] text-slate-400 italic text-right font-bold uppercase tracking-tight">
-                  Calculated {showVat ? 'Gross' : 'Net'} of VAT: ₱{total.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                  Calculated {showVat ? 'Gross' : 'Net'} of VAT: ₱{effectiveGrandTotal.toLocaleString(undefined, {minimumFractionDigits: 2})}
                 </div>
 
 
@@ -414,9 +437,9 @@ const PreviewModal: React.FC<Props> = ({
                   <div className="bg-[#FFFF00] text-center text-black font-black text-[8pt] border-b border-black py-1 uppercase tracking-widest">NOTE AND REMARKS: ALL INDICATED BELOW SHALL BE BILLED SEPARATELY</div>
                   <div className="p-2 space-y-1">
                     {template.notesAndRemarks.map((note, idx) => (
-                      <div key={idx} className="flex text-[7.2pt] font-bold uppercase text-slate-800 whitespace-pre-wrap">
-                        <span className="w-6 text-center shrink-0">{idx + 1}</span>
-                        <span>{note}</span>
+                      <div key={idx} className="grid grid-cols-[24px_1fr] gap-1 text-[7.2pt] font-bold uppercase text-slate-800 leading-[1.45]">
+                        <span className="text-center shrink-0 leading-[1.45]">{idx + 1}</span>
+                        <span className="whitespace-pre-wrap break-words leading-[1.45]">{note}</span>
                       </div>
                     ))}
                   </div>
@@ -429,9 +452,9 @@ const PreviewModal: React.FC<Props> = ({
                 <div className="bg-[#003366] text-white text-center font-bold text-[9pt] border-b border-black py-1.5 uppercase tracking-widest">TERMS AND CONDITIONS</div>
                 <div className="p-3 space-y-1.5">
                   {template.termsAndConditions.map((term, idx) => (
-                    <div key={idx} className="flex text-[7.2pt] font-bold uppercase leading-relaxed text-slate-800">
-                      <span className="w-6 text-center shrink-0">{term.key}</span>
-                      <span>{term.value}</span>
+                    <div key={idx} className="grid grid-cols-[24px_1fr] gap-1 text-[7.2pt] font-bold uppercase text-slate-800 leading-[1.45]">
+                      <span className="text-center shrink-0 leading-[1.45]">{term.key}</span>
+                      <span className="whitespace-pre-wrap break-words leading-[1.45]">{term.value}</span>
                     </div>
                   ))}
                 </div>

@@ -153,8 +153,18 @@ const PipelineDetail: React.FC<Props> = ({ quote, onClose, onUpdateStatus, onAdd
     const itemsTotal = quote.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
     const laborTotal = (quote.laborServices || []).reduce((sum, s) => sum + s.price, 0);
     const subtotal = itemsTotal + laborTotal;
+  const discountType = quote.discountType || 'percentage';
+  const discountValue = quote.discountValue ?? quote.discountPercent ?? 0;
   const contractorDiscount = quote.customer.clientType === ClientType.SYSTEM_CONTRACTOR ? subtotal * 0.20 : 0;
-  const manualDiscount = subtotal * (quote.discountPercent / 100);
+  const configuredDiscountAmount =
+    discountType === 'fixed'
+      ? discountValue
+      : subtotal * (discountValue / 100);
+  const manualDiscount = quote.customer.clientType === ClientType.SYSTEM_CONTRACTOR
+    ? (discountType === 'fixed'
+        ? discountValue
+        : Math.max(0, configuredDiscountAmount - contractorDiscount))
+    : configuredDiscountAmount;
   const netTotal = subtotal - contractorDiscount - manualDiscount;
   const vatAmount = netTotal * 0.12;
   const showVat = quote.showVat ?? true;
@@ -259,7 +269,15 @@ const PipelineDetail: React.FC<Props> = ({ quote, onClose, onUpdateStatus, onAdd
                   )}
                   {manualDiscount > 0 && (
                      <div className="flex justify-between text-slate-600">
-                      <span>Manual Adjustment ({quote.discountPercent}%)</span>
+                      <span>
+                        {discountType === 'fixed'
+                          ? 'Manual Adjustment (Fixed)'
+                          : `Manual Adjustment (${(
+                              quote.customer.clientType === ClientType.SYSTEM_CONTRACTOR
+                                ? Math.max(0, discountValue - 20)
+                                : discountValue
+                            ).toLocaleString(undefined, { maximumFractionDigits: 2 })}%)`}
+                      </span>
                       <span className="text-orange-600 font-bold">-₱{manualDiscount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                     </div>
                   )}

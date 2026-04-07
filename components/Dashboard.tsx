@@ -14,7 +14,7 @@ import AdminPanel from './AdminPanel';
 import ExcelImporter from './ExcelImporter';
 import AIChat from './AIChat';
 import { sendQuotationEmail } from '../services/emailService';
-import { blobToBase64 } from '../services/pdfService';
+import { blobToBase64, generateQuotationPDF } from '../services/pdfService';
 import { addCustomer } from '../services/customerApi';
 import { triggerPipelineUploadHook, uploadQuotationFile } from '../services/quotationFileApi';
 import { fetchProducts } from '../services/productsApi';
@@ -42,6 +42,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PaymentMethod.BANK_TRANSFER);
   const [discountValue, setDiscountValue] = useState<number>(0);
   const [discountType, setDiscountType] = useState<'percentage' | 'fixed'>('percentage');
+  const [manualDiscountEnabled, setManualDiscountEnabled] = useState<boolean>(true);
   const [showVat, setShowVat] = useState<boolean>(true);
   const [currentStatus, setCurrentStatus] = useState<QuotationStatus>(QuotationStatus.INQUIRY);
   const [activeTab, setActiveTab] = useState<'estimation' | 'quotation' | 'pipeline' | 'admin'>('estimation');
@@ -75,6 +76,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const chatSensorRef = useRef<HTMLDivElement>(null);
   const processedAllyOpportunityIdsRef = useRef<Set<string>>(new Set());
+  const latestDesignedPdfRef = useRef<{ blob: Blob; fileName: string; at: number } | null>(null);
+  const submitPipelinePrintRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -125,6 +128,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
           setPaymentMethod(savedAppState.paymentMethod);
           setDiscountValue(savedAppState.discountValue || savedAppState.discountPercent || 0);
           setDiscountType(savedAppState.discountType || 'percentage');
+          setManualDiscountEnabled(savedAppState.manualDiscountEnabled ?? true);
           setShowVat(savedAppState.showVat);
           setCurrentStatus(savedAppState.currentStatus);
           setPdfFileName(savedAppState.pdfFileName || '');
@@ -175,6 +179,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
         customer,
         paymentMethod,
         discountValue,
+        manualDiscountEnabled,
         discountType,
         discountPercent: discountType === 'percentage' ? discountValue : 0, // for backward compatibility
         showVat,
@@ -184,7 +189,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
       });
     }, 1000);
     return () => clearTimeout(timer);
-  }, [items, customer, paymentMethod, discountValue, discountType, showVat, currentStatus]);
+  }, [items, customer, paymentMethod, discountValue, manualDiscountEnabled, discountType, showVat, currentStatus]);
 
   const persistQuotes = async (quotes: QuotationRecord[]) => {
     setSavedQuotes(quotes);
@@ -725,7 +730,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
 
     const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
     const laborCost = customer.hasLabor ? (customer.laborCost || 0) : 0;
-    const discountAmount = discountType === 'percentage' ? (subtotal * (discountValue / 100)) : discountValue;
+    const effectiveDiscountValue = manualDiscountEnabled ? discountValue : 0;
+    const discountAmount = discountType === 'percentage' ? (subtotal * (effectiveDiscountValue / 100)) : effectiveDiscountValue;
     const netTotal = subtotal - discountAmount + laborCost;
     const vat = netTotal * 0.12;
     const finalTotal = showVat ? netTotal + vat : netTotal;
@@ -736,9 +742,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
       laborServices: [...laborServices],
       customer: { ...customer },
       paymentMethod,
-      discountPercent: discountType === 'percentage' ? discountValue : 0,
+      discountPercent: discountType === 'percentage' ? effectiveDiscountValue : 0,
       discountType,
-      discountValue,
+      discountValue: effectiveDiscountValue,
       showVat,
       status: currentStatus === QuotationStatus.INQUIRY ? QuotationStatus.PREPARATION : currentStatus,
       total: finalTotal, createdAt: new Date().toISOString(),
@@ -747,19 +753,65 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
       isDraft: false,
     };
     await persistQuotes([newQuote, ...savedQuotes]);
+    let designedPdfBlob: Blob | undefined;
+    try {
+      if (submitPipelinePrintRef.current) {
+        designedPdfBlob = await generateQuotationPDF(submitPipelinePrintRef.current, `${newQuote.id}.pdf`);
+        latestDesignedPdfRef.current = { blob: designedPdfBlob, fileName: `${newQuote.id}.pdf`, at: Date.now() };
+      }
+    } catch (e: any) {
+      showToast(`Designed PDF generation failed, using fallback upload: ${e?.message || 'PDF error'}`, 'info');
+    }
+
+    const cachedDesignedPdf = designedPdfBlob
+      ? { blob: designedPdfBlob, fileName: `${newQuote.id}.pdf`, at: Date.now() }
+      : latestDesignedPdfRef.current;
+    const useDesignedPdf = !!cachedDesignedPdf;
     try {
       await triggerPipelineUploadHook({
         quoteId: newQuote.id,
         customerName: newQuote.customer.fullName || newQuote.customer.companyName,
         total: newQuote.total,
         createdAt: newQuote.createdAt,
+        pdfBlob: useDesignedPdf ? cachedDesignedPdf.blob : undefined,
+        fileName: useDesignedPdf ? `${newQuote.id}.pdf` : undefined,
       });
+      if (!useDesignedPdf) showToast('Pipeline uploaded using fallback PDF.', 'info');
     } catch (e: any) {
       showToast(`Pipeline upload trigger failed: ${e?.message || 'Server error'}`, 'error');
     }
     showToast('Quote submitted. Customer saved to backend; quotation saved to pipeline.');
-    setItems([]); setUploadedFiles([]); setCustomer(INITIAL_CUSTOMER);
-    setDiscountValue(0); setDiscountType('percentage'); setCurrentStatus(QuotationStatus.INQUIRY); setActiveTab('pipeline');
+    const resetReference = `PQ-FDAS-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
+    setItems([]);
+    setUploadedFiles([]);
+    setLaborServices([]);
+    setCustomer(INITIAL_CUSTOMER);
+    setPaymentMethod(PaymentMethod.BANK_TRANSFER);
+    setDiscountValue(0);
+    setDiscountType('percentage');
+    setManualDiscountEnabled(true);
+    setShowVat(true);
+    setCurrentStatus(QuotationStatus.INQUIRY);
+    setPdfFileName('');
+    setPreviewId(resetReference);
+    setSelectedQuoteId(null);
+    setActiveTab('pipeline');
+    await saveCurrentAppState({
+      id: 'current',
+      items: [],
+      uploadedFiles: [],
+      laborServices: [],
+      customer: INITIAL_CUSTOMER,
+      paymentMethod: PaymentMethod.BANK_TRANSFER,
+      discountPercent: 0,
+      discountType: 'percentage',
+      discountValue: 0,
+      manualDiscountEnabled: true,
+      showVat: true,
+      currentStatus: QuotationStatus.INQUIRY,
+      pdfFileName: '',
+      referenceCode: resetReference,
+    });
   };
 
   const handlePromoteFromDraft = (id: string) => {
@@ -864,7 +916,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
       } else {
         const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
         const laborCost = customer.hasLabor ? (customer.laborCost || 0) : 0;
-        const discountAmount = discountType === 'percentage' ? (subtotal * (discountValue / 100)) : discountValue;
+        const effectiveDiscountValue = manualDiscountEnabled ? discountValue : 0;
+        const discountAmount = discountType === 'percentage' ? (subtotal * (effectiveDiscountValue / 100)) : effectiveDiscountValue;
         const netTotal = subtotal - discountAmount + laborCost;
         const vat = netTotal * 0.12;
         const finalTotal = showVat ? netTotal + vat : netTotal;
@@ -874,9 +927,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
           laborServices: [...laborServices],
           customer: { ...customer }, 
           paymentMethod, 
-          discountPercent: discountType === 'percentage' ? discountValue : 0,
+          discountPercent: discountType === 'percentage' ? effectiveDiscountValue : 0,
           discountType,
-          discountValue,
+          discountValue: effectiveDiscountValue,
           showVat,
           status: QuotationStatus.FOLLOWUP, total: finalTotal, createdAt: new Date().toISOString(),
           logs: [{ date: new Date().toISOString(), note: 'Created via Email flow.', user: 'System' }],
@@ -895,6 +948,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
 
   const handlePersistPdf = useCallback(async (pdfBlob: Blob, fileName: string) => {
     try {
+      latestDesignedPdfRef.current = { blob: pdfBlob, fileName, at: Date.now() };
       await uploadQuotationFile(pdfBlob, fileName);
       showToast('Quotation PDF uploaded to server storage.', 'success');
     } catch (e: any) {
@@ -907,11 +961,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   const laborCost = useMemo(() => customer.hasLabor ? (customer.laborCost || 0) : 0, [customer.hasLabor, customer.laborCost]);
   
   const discountAmount = useMemo(() => {
+    if (!manualDiscountEnabled) return 0;
     if (discountType === 'percentage') {
       return subtotal * (discountValue / 100);
     }
     return discountValue;
-  }, [subtotal, discountValue, discountType]);
+  }, [subtotal, discountValue, discountType, manualDiscountEnabled]);
 
   const netTotal = useMemo(() => subtotal - discountAmount + laborCost, [subtotal, discountAmount, laborCost]);
   
@@ -1297,6 +1352,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                       vat={vatAmount}
                       discountValue={discountValue}
                       discountType={discountType}
+                      manualDiscountEnabled={manualDiscountEnabled}
+                      onManualDiscountEnabledChange={setManualDiscountEnabled}
                       onDiscountValueChange={setDiscountValue}
                       onDiscountTypeChange={setDiscountType}
                       showVat={showVat}
@@ -1372,6 +1429,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                         vat={vatAmount} 
                         discountValue={discountValue}
                         discountType={discountType}
+                        manualDiscountEnabled={manualDiscountEnabled}
+                        onManualDiscountEnabledChange={setManualDiscountEnabled}
                         onDiscountValueChange={setDiscountValue}
                         onDiscountTypeChange={setDiscountType}
                         showVat={showVat}
@@ -1547,6 +1606,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
         laborCost={laborCost}
         vat={vatAmount} 
         discountAmount={discountAmount} 
+        discountValue={manualDiscountEnabled ? discountValue : 0}
+        discountType={discountType}
         total={grandTotal} 
         showVat={showVat}
         existingQuoteId={previewId} 
@@ -1555,6 +1616,28 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
         template={pdfTemplate}
         customFileName={pdfFileName}
         onCustomFileNameChange={setPdfFileName}
+      />
+      <PreviewModal
+        headless
+        printRefOverride={submitPipelinePrintRef}
+        isOpen={false}
+        onClose={() => {}}
+        items={items}
+        customer={customer}
+        paymentMethod={paymentMethod}
+        subtotal={subtotal}
+        laborCost={laborCost}
+        vat={vatAmount}
+        discountAmount={discountAmount}
+        discountValue={manualDiscountEnabled ? discountValue : 0}
+        discountType={discountType}
+        total={grandTotal}
+        showVat={showVat}
+        existingQuoteId={previewId}
+        onSendEmail={async () => {}}
+        template={pdfTemplate}
+        customFileName={pdfFileName || `Quotation_${previewId}`}
+        onCustomFileNameChange={() => {}}
       />
       {selectedQuoteId && (
         <PipelineDetail
@@ -1568,6 +1651,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
             setCustomer(q.customer);
             setDiscountValue(q.discountValue || q.discountPercent || 0);
             setDiscountType(q.discountType || 'percentage');
+            setManualDiscountEnabled((q.discountValue || q.discountPercent || 0) > 0);
             setShowVat(q.showVat ?? true);
             setPaymentMethod(q.paymentMethod);
             setPreviewId(q.id);
@@ -1581,6 +1665,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
             setCustomer(q.customer);
             setDiscountValue(q.discountValue || q.discountPercent || 0);
             setDiscountType(q.discountType || 'percentage');
+            setManualDiscountEnabled((q.discountValue || q.discountPercent || 0) > 0);
             setShowVat(q.showVat ?? true);
             setPaymentMethod(q.paymentMethod);
             setPreviewId(q.id);

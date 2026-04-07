@@ -1,3 +1,5 @@
+import { jsPDF } from 'jspdf';
+
 export interface UploadQuotationResponse {
   message?: string;
   fileName?: string;
@@ -10,6 +12,8 @@ export interface PipelineUploadTriggerPayload {
   customerName?: string;
   total?: number;
   createdAt?: string;
+  pdfBlob?: Blob;
+  fileName?: string;
 }
 
 function getUploadQuotationUrl(): string {
@@ -74,33 +78,35 @@ function getSubmitPipelineTriggerUrl(): string {
 
 export async function triggerPipelineUploadHook(payload: PipelineUploadTriggerPayload): Promise<void> {
   const url = getSubmitPipelineTriggerUrl();
-  const jsPDFLib = (window as any).jspdf;
-  const jsPDFCtor = jsPDFLib?.jsPDF || jsPDFLib;
-  if (!jsPDFCtor) {
-    throw new Error('PDF library is unavailable for pipeline upload.');
+  let pdfBlob: Blob;
+  if (payload.pdfBlob) {
+    pdfBlob = payload.pdfBlob;
+  } else {
+    // Fallback only when a full designed PDF blob is unavailable.
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
+    const lines = [
+      'AA2000 Sales Quotation',
+      '',
+      `Reference: ${payload.quoteId}`,
+      `Customer: ${payload.customerName || '-'}`,
+      `Total: ₱${Number(payload.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+      `Created At: ${payload.createdAt || new Date().toISOString()}`,
+      '',
+      'Generated automatically during Submit to Pipeline.',
+    ];
+    let y = 20;
+    lines.forEach((line: string) => {
+      pdf.text(line, 15, y);
+      y += 7;
+    });
+    pdfBlob = pdf.output('blob');
   }
 
-  // Create a lightweight server-upload PDF when submitting to pipeline.
-  const pdf = new jsPDFCtor({ unit: 'mm', format: 'a4' });
-  const lines = [
-    'AA2000 Sales Quotation',
-    '',
-    `Reference: ${payload.quoteId}`,
-    `Customer: ${payload.customerName || '-'}`,
-    `Total: ₱${Number(payload.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
-    `Created At: ${payload.createdAt || new Date().toISOString()}`,
-    '',
-    'Generated automatically during Submit to Pipeline.',
-  ];
-  let y = 20;
-  lines.forEach((line: string) => {
-    pdf.text(line, 15, y);
-    y += 7;
-  });
-  const pdfBlob: Blob = pdf.output('blob');
-
   const formData = new FormData();
-  formData.append('file', pdfBlob, `${payload.quoteId || 'quotation'}.pdf`);
+  const uploadFileName = payload.fileName?.trim()
+    ? (payload.fileName.toLowerCase().endsWith('.pdf') ? payload.fileName : `${payload.fileName}.pdf`)
+    : `${payload.quoteId || 'quotation'}.pdf`;
+  formData.append('file', pdfBlob, uploadFileName);
   formData.append('quoteId', payload.quoteId || '');
   formData.append('customerName', payload.customerName || '');
   formData.append('total', String(payload.total ?? ''));

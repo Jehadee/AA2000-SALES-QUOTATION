@@ -2,6 +2,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { SelectedItem, CustomerInfo, PaymentMethod, ClientType, PDFTemplate } from '../types';
 import { generateQuotationPDF } from '../services/pdfService';
+import { getPdfHeaderLines } from '../utils/pdfHeaderLines';
 
 interface Props {
   isOpen: boolean;
@@ -36,6 +37,11 @@ const PreviewModal: React.FC<Props> = ({
     if (existingQuoteId) return existingQuoteId;
     return 'PQ-FDAS-' + new Date().getFullYear() + '-' + Date.now().toString().slice(-3);
   }, [existingQuoteId]);
+
+  const { brand: pdfHeaderBrand, tagline: pdfHeaderTagline } = React.useMemo(
+    () => getPdfHeaderLines(template.companyInfo),
+    [template.companyInfo],
+  );
 
   useEffect(() => {
     if (isOpen && !customFileName) {
@@ -165,80 +171,113 @@ const PreviewModal: React.FC<Props> = ({
               marginBottom: scale < 1 ? `-${(1-scale) * 100}%` : '0', 
             }}
           >
-            {/* PDF-HEADER — solid rectangles only (gradients/skew often rasterize as white in html2canvas, hiding white-on-blue contact text). */}
-            <div className="pdf-header relative bg-white overflow-hidden h-[130px] border-b-2 border-black">
-              <div className="absolute top-0 left-0 h-full w-[45%] bg-white z-0 pointer-events-none" aria-hidden />
-              <div className="absolute top-0 right-0 bottom-0 left-[45%] bg-[#004a8d] z-[1] pointer-events-none" aria-hidden />
+            {/* PDF-HEADER — solid layers for html2canvas; ~41% brand column, separator, blue contact block */}
+            <div className="pdf-header relative bg-white overflow-hidden min-h-[152px] border-b-2 border-black">
+              <div className="absolute top-0 left-0 h-full w-[41%] bg-white z-0 pointer-events-none" aria-hidden />
               <div
                 className="absolute top-0 bottom-0 z-[1] pointer-events-none bg-[#031b33]"
-                style={{ left: '45%', width: '2.5%' }}
+                style={{ left: '41%', width: '2%' }}
                 aria-hidden
               />
-              
-              {/* Header Image (Product Showcase) */}
+              <div className="absolute top-0 right-0 bottom-0 left-[43%] bg-[#004a8d] z-0 pointer-events-none" aria-hidden />
+
               {template.companyInfo.headerImage && (
-                <div 
-                  className="absolute z-10"
+                <div
+                  className="absolute z-[5]"
                   style={{
                     left: 0,
                     top: `${template.companyInfo.headerImage.yOffset || 0}px`,
                     width: '100%',
-                    pointerEvents: 'none' // Ensure it doesn't block text selection if overlaying
+                    pointerEvents: 'none',
                   }}
                 >
-                  <img 
-                    src={template.companyInfo.headerImage.url} 
+                  <img
+                    src={template.companyInfo.headerImage.url}
                     alt="Header Decoration"
                     style={{
                       width: `${template.companyInfo.headerImage.width}px`,
                       height: `${template.companyInfo.headerImage.height}px`,
-                      objectFit: 'contain'
-                    }} 
+                      objectFit: 'contain',
+                    }}
                   />
                 </div>
               )}
 
-              <div className="relative z-10 flex w-full h-full items-center px-[12mm]">
-                <div className="w-[45%] flex items-center gap-4">
-                  {/* Logo Area */}
+              <div className="relative z-10 flex w-full min-h-[152px] items-stretch py-2">
+                <div className="flex-[0_0_41%] w-[41%] max-w-[41%] box-border flex flex-col items-center justify-center gap-1.5 px-3 text-center">
                   {template.companyInfo.logoUrl && (
-                    <div 
-                      style={{ 
-                        transform: `translate(${template.companyInfo.logoXOffset || 0}px, ${template.companyInfo.logoYOffset || 0}px)` 
+                    <div
+                      style={{
+                        transform: `translate(${template.companyInfo.logoXOffset || 0}px, ${template.companyInfo.logoYOffset || 0}px)`,
                       }}
-                      className="shrink-0"
+                      className="shrink-0 flex justify-center"
                     >
-                      <img 
-                        src={template.companyInfo.logoUrl} 
-                        alt="Logo" 
-                        style={{ width: `${template.companyInfo.logoWidth || 200}px` }}
-                        className="max-w-full object-contain"
+                      <img
+                        src={template.companyInfo.logoUrl}
+                        alt="Logo"
+                        style={{
+                          width: `${template.companyInfo.logoWidth ?? 96}px`,
+                          maxWidth: 'min(120px, 85%)',
+                        }}
+                        className="h-auto object-contain"
                       />
                     </div>
                   )}
 
-                  {/* Company Name */}
-                  <div className="flex-1 min-w-0">
-                    <h1 
-                      style={{
-                        fontSize: `${template.companyInfo.companyNameStyle?.fontSize || 32}pt`,
-                        color: template.companyInfo.companyNameStyle?.color || '#004a8d',
-                        fontWeight: template.companyInfo.companyNameStyle?.fontWeight || '900',
-                        fontFamily: template.companyInfo.companyNameStyle?.fontFamily || 'Inter',
-                        fontStyle: template.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
-                      }}
-                      className="tracking-tighter leading-none uppercase whitespace-pre-wrap"
-                    >
-                      {template.companyInfo.name}
-                    </h1>
+                  <div className="flex flex-col items-center gap-0.5 w-full min-w-0">
+                    {pdfHeaderTagline ? (
+                      <>
+                        <h1
+                          style={{
+                            fontSize: `${template.companyInfo.companyNameStyle?.fontSize ?? 22}pt`,
+                            color: template.companyInfo.companyNameStyle?.color || '#004a8d',
+                            fontWeight: template.companyInfo.companyNameStyle?.fontWeight || '900',
+                            fontFamily: template.companyInfo.companyNameStyle?.fontFamily || 'Inter',
+                            fontStyle: template.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
+                          }}
+                          className="tracking-tight leading-none uppercase whitespace-pre-wrap"
+                        >
+                          {pdfHeaderBrand}
+                        </h1>
+                        <p
+                          className="text-[9pt] font-semibold italic text-black leading-snug max-w-[95%]"
+                          style={{
+                            fontFamily: template.companyInfo.companyNameStyle?.fontFamily || 'Inter',
+                          }}
+                        >
+                          {pdfHeaderTagline}
+                        </p>
+                      </>
+                    ) : (
+                      <h1
+                        style={{
+                          fontSize: `${template.companyInfo.companyNameStyle?.fontSize ?? 22}pt`,
+                          color: template.companyInfo.companyNameStyle?.color || '#004a8d',
+                          fontWeight: template.companyInfo.companyNameStyle?.fontWeight || '900',
+                          fontFamily: template.companyInfo.companyNameStyle?.fontFamily || 'Inter',
+                          fontStyle: template.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
+                        }}
+                        className="tracking-tight leading-none uppercase whitespace-pre-wrap"
+                      >
+                        {template.companyInfo.name}
+                      </h1>
+                    )}
                   </div>
                 </div>
 
-                <div className="flex-1 flex flex-col justify-center items-center text-center text-white pl-12 pr-4 space-y-1">
-                  <p className="text-[8.5pt] font-black uppercase tracking-wide leading-tight">{template.companyInfo.address}</p>
-                  <p className="text-[8.5pt] font-black uppercase tracking-tight">T: {template.companyInfo.phone} / M: {template.companyInfo.mobile}</p>
-                  <p className="text-[8.5pt] font-black uppercase tracking-tight">E: {template.companyInfo.email}</p>
-                  <p className="text-[9.5pt] font-black uppercase tracking-widest underline">{template.companyInfo.website}</p>
+                <div className="flex-1 min-w-0 flex flex-col justify-center items-stretch text-center text-white px-5 sm:px-6 space-y-0.5 self-center">
+                  <p className="text-[8.5pt] font-black uppercase tracking-wide leading-[1.25] whitespace-pre-line">
+                    {template.companyInfo.address}
+                  </p>
+                  <p className="text-[8.5pt] font-black uppercase tracking-tight leading-tight">
+                    T: {template.companyInfo.phone} / M: {template.companyInfo.mobile}
+                  </p>
+                  <p className="text-[8.5pt] font-black uppercase tracking-tight leading-tight">
+                    E: {template.companyInfo.email}
+                  </p>
+                  <p className="text-[9.5pt] font-black uppercase tracking-widest underline leading-tight">
+                    {template.companyInfo.website}
+                  </p>
                 </div>
               </div>
             </div>

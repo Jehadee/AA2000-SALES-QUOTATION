@@ -137,6 +137,10 @@ export interface QuotationRecord {
 export interface PDFTemplate {
   companyInfo: {
     name: string;
+    /** Large brand line in the PDF header (e.g. AA2000). Falls back to first word of `name` if unset. */
+    brandName?: string;
+    /** Smaller line under the brand (e.g. legal name), typically black italic. Falls back to remainder of `name`. */
+    tagline?: string;
     address: string;
     phone: string;
     mobile: string;

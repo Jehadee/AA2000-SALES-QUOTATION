@@ -4,6 +4,7 @@ import { Product, AdminLog, QuotationRecord, SystemBackup, PDFTemplate } from '.
 import { Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { deriveTierPricesFromBasePrice, END_USER_MARKUP, roundMoney } from '../services/pricing';
+import { getPdfHeaderLines } from '../utils/pdfHeaderLines';
 
 interface Props {
   currentProducts: Product[];
@@ -961,68 +962,84 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
             {/* Visual Editor "Paper" */}
             <div className="bg-white shadow-2xl rounded-sm border border-slate-300 overflow-hidden flex flex-col min-h-[1200px] w-full max-w-[800px] mx-auto">
               
-              {/* HEADER MOCKUP */}
-              <div className="relative bg-white overflow-hidden h-[130px] border-b-2 border-black">
-                {/* Dark Blue Accent Strip */}
-                <div className="absolute top-0 right-0 w-[72%] h-full bg-[#031b33] origin-top-right -skew-x-[30deg] translate-x-[10%] z-0"></div>
-                {/* Main Blue Background */}
-                <div className="absolute top-0 right-0 w-[68%] h-full bg-[#004a8d] origin-top-right -skew-x-[30deg] translate-x-[15%] z-0"></div>
-                
-                <div className="relative z-10 flex w-full h-full items-center px-8">
-                  <div className="w-[45%] flex items-center gap-4 relative">
-                    {/* Logo Area - Clickable */}
-                    <div 
+              {/* HEADER MOCKUP (matches PDF preview layout) */}
+              <div className="relative bg-white overflow-hidden min-h-[152px] border-b-2 border-black">
+                <div className="absolute top-0 left-0 h-full w-[41%] bg-white z-0 pointer-events-none" aria-hidden />
+                <div className="absolute top-0 bottom-0 z-[1] pointer-events-none bg-[#031b33] w-[2%] left-[41%]" aria-hidden />
+                <div className="absolute top-0 right-0 bottom-0 left-[43%] bg-[#004a8d] z-0 pointer-events-none" aria-hidden />
+
+                <div className="relative z-10 flex w-full min-h-[152px] items-stretch py-2">
+                  <div className="flex-[0_0_41%] w-[41%] max-w-[41%] box-border flex flex-col items-center justify-center gap-1.5 px-3 text-center">
+                    <div
                       onClick={() => logoInputRef.current?.click()}
-                      className="cursor-pointer group relative shrink-0"
+                      className="cursor-pointer group relative flex flex-col items-center"
                       title="Click to upload logo"
                     >
                       {pdfTemplate.companyInfo.logoUrl ? (
-                        <div 
-                          style={{ 
-                            transform: `translate(${pdfTemplate.companyInfo.logoXOffset || 0}px, ${pdfTemplate.companyInfo.logoYOffset || 0}px)` 
+                        <div
+                          style={{
+                            transform: `translate(${pdfTemplate.companyInfo.logoXOffset || 0}px, ${pdfTemplate.companyInfo.logoYOffset || 0}px)`,
                           }}
                           className="transition-transform duration-200"
                         >
-                          <img 
-                            src={pdfTemplate.companyInfo.logoUrl} 
-                            alt="Logo" 
-                            style={{ width: `${pdfTemplate.companyInfo.logoWidth || 200}px` }}
-                            className="max-w-full object-contain"
+                          <img
+                            src={pdfTemplate.companyInfo.logoUrl}
+                            alt="Logo"
+                            style={{ width: `${pdfTemplate.companyInfo.logoWidth ?? 96}px`, maxWidth: 'min(120px, 85%)' }}
+                            className="h-auto object-contain"
                           />
                         </div>
                       ) : (
-                        <div className="w-16 h-16 bg-[#004a8d] rounded-full flex items-center justify-center p-3 shadow-lg group-hover:bg-[#003366] transition-colors">
+                        <div className="w-14 h-14 bg-[#004a8d] rounded-full flex items-center justify-center p-2 shadow-lg group-hover:bg-[#003366] transition-colors">
                           <svg className="w-full h-full text-white" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
                         </div>
                       )}
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 rounded-xl transition-colors flex items-center justify-center">
-                        <svg className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                      </div>
                     </div>
 
-                    {/* Company Name - Always Visible & Editable */}
-                    <div className="flex-1 min-w-0">
-                      <textarea 
-                        value={pdfTemplate.companyInfo.name} 
+                    <div className="flex flex-col items-center gap-1 w-full min-w-0">
+                      {(() => {
+                        const { brand: phBrand, tagline: phTag } = getPdfHeaderLines(pdfTemplate.companyInfo);
+                        return (
+                          <>
+                            <input
+                              type="text"
+                              value={pdfTemplate.companyInfo.brandName ?? ''}
+                              onChange={(e) => handleUpdateTemplateField('companyInfo.brandName', e.target.value)}
+                              placeholder={phBrand}
+                              style={{
+                                fontSize: `${pdfTemplate.companyInfo.companyNameStyle?.fontSize || 22}pt`,
+                                color: pdfTemplate.companyInfo.companyNameStyle?.color || '#004a8d',
+                                fontWeight: pdfTemplate.companyInfo.companyNameStyle?.fontWeight || '900',
+                                fontFamily: pdfTemplate.companyInfo.companyNameStyle?.fontFamily || 'Inter',
+                                fontStyle: pdfTemplate.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
+                              }}
+                              className="w-full bg-transparent border-b border-dashed border-slate-200 hover:border-indigo-300 focus:border-indigo-500 outline-none uppercase leading-none tracking-tight text-center"
+                            />
+                            <input
+                              type="text"
+                              value={pdfTemplate.companyInfo.tagline ?? ''}
+                              onChange={(e) => handleUpdateTemplateField('companyInfo.tagline', e.target.value)}
+                              placeholder={phTag || 'Tagline'}
+                              className="w-full bg-transparent border-b border-dashed border-slate-200 hover:border-indigo-300 focus:border-indigo-500 outline-none text-[9pt] font-semibold italic text-black leading-snug text-center"
+                            />
+                          </>
+                        );
+                      })()}
+                      <textarea
+                        value={pdfTemplate.companyInfo.name}
                         onChange={(e) => handleUpdateTemplateField('companyInfo.name', e.target.value)}
-                        style={{
-                          fontSize: `${pdfTemplate.companyInfo.companyNameStyle?.fontSize || 16}pt`,
-                          color: pdfTemplate.companyInfo.companyNameStyle?.color || '#004a8d',
-                          fontWeight: pdfTemplate.companyInfo.companyNameStyle?.fontWeight || '900',
-                          fontFamily: pdfTemplate.companyInfo.companyNameStyle?.fontFamily || 'Inter',
-                          fontStyle: pdfTemplate.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
-                        }}
-                        className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-indigo-500 outline-none uppercase leading-none tracking-tighter resize-none overflow-hidden whitespace-pre-wrap"
+                        className="w-full mt-0.5 bg-slate-50/80 rounded px-1 py-0.5 border border-transparent hover:border-slate-200 focus:border-indigo-400 outline-none text-[7pt] font-bold uppercase text-slate-500 leading-tight text-center resize-none"
                         rows={2}
+                        title="Full legal name (used when tagline fields are empty)"
                       />
                     </div>
                   </div>
 
-                  <div className="flex-1 text-center text-white space-y-1 pl-8">
+                  <div className="flex-1 min-w-0 flex flex-col justify-center items-stretch text-center text-white px-5 space-y-0.5 self-center">
                     <textarea 
                       value={pdfTemplate.companyInfo.address} 
                       onChange={(e) => handleUpdateTemplateField('companyInfo.address', e.target.value)}
-                      className="w-full bg-transparent border-none outline-none text-[8pt] font-black uppercase text-center resize-none h-12 leading-tight overflow-hidden"
+                      className="w-full bg-transparent border-none outline-none text-[8pt] font-black uppercase text-center resize-none min-h-[3.25rem] leading-[1.25] whitespace-pre-line overflow-hidden"
                     />
                     <div className="flex justify-center items-center gap-1 text-[8pt] font-black uppercase">
                       <span>T:</span>

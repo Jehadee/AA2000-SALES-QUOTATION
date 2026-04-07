@@ -2,7 +2,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { SelectedItem, CustomerInfo, PaymentMethod, ClientType, PDFTemplate } from '../types';
 import { generateQuotationPDF } from '../services/pdfService';
-import { getPdfHeaderLines } from '../utils/pdfHeaderLines';
 
 interface Props {
   isOpen: boolean;
@@ -37,11 +36,6 @@ const PreviewModal: React.FC<Props> = ({
     if (existingQuoteId) return existingQuoteId;
     return 'PQ-FDAS-' + new Date().getFullYear() + '-' + Date.now().toString().slice(-3);
   }, [existingQuoteId]);
-
-  const pdfHeaderBrand = React.useMemo(
-    () => getPdfHeaderLines(template.companyInfo).brand,
-    [template.companyInfo],
-  );
 
   useEffect(() => {
     if (isOpen && !customFileName) {
@@ -204,23 +198,20 @@ const PreviewModal: React.FC<Props> = ({
               )}
 
               <div className="relative z-10 flex w-full min-h-[152px] items-stretch py-2">
-                <div className="flex-[0_0_41%] w-[41%] max-w-[41%] box-border flex flex-col items-center justify-center gap-2 px-3 py-1 text-center">
-                  <div className="flex w-full min-h-[4.5rem] items-center justify-center shrink-0">
+                <div className="flex-[0_0_41%] w-[41%] max-w-[41%] box-border flex items-center justify-center px-3 py-1 text-center">
+                  <div className="flex w-full min-h-[7rem] items-center justify-center shrink-0">
                     {template.companyInfo.logoUrl ? (
-                      <div
-                        style={{
-                          transform: `translate(${template.companyInfo.logoXOffset || 0}px, ${template.companyInfo.logoYOffset || 0}px)`,
-                        }}
-                        className="flex justify-center"
-                      >
+                      <div className="flex h-[100px] w-[180px] items-center justify-center overflow-hidden">
                         <img
                           src={template.companyInfo.logoUrl}
                           alt="Logo"
                           style={{
-                            width: `${template.companyInfo.logoWidth ?? 96}px`,
-                            maxWidth: 'min(120px, 85%)',
+                            width: '120px',
+                            height: 'auto',
+                            transform: `scale(${Math.max(0.25, (template.companyInfo.logoWidth ?? 120) / 120)})`,
+                            transformOrigin: 'center center',
                           }}
-                          className="h-auto object-contain"
+                          className="object-contain"
                         />
                       </div>
                     ) : (
@@ -234,19 +225,6 @@ const PreviewModal: React.FC<Props> = ({
                       </div>
                     )}
                   </div>
-
-                  <h1
-                    style={{
-                      fontSize: `${template.companyInfo.companyNameStyle?.fontSize ?? 22}pt`,
-                      color: template.companyInfo.companyNameStyle?.color || '#004a8d',
-                      fontWeight: template.companyInfo.companyNameStyle?.fontWeight || '900',
-                      fontFamily: template.companyInfo.companyNameStyle?.fontFamily || 'Inter',
-                      fontStyle: template.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
-                    }}
-                    className="w-full min-w-0 tracking-tight leading-none uppercase whitespace-pre-wrap"
-                  >
-                    {pdfHeaderBrand}
-                  </h1>
                 </div>
 
                 <div className="flex-1 min-w-0 flex flex-col justify-center items-stretch text-center text-white px-5 sm:px-6 space-y-0.5 self-center">

@@ -969,10 +969,10 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                 <div className="absolute top-0 right-0 bottom-0 left-[43%] bg-[#004a8d] z-0 pointer-events-none" aria-hidden />
 
                 <div className="relative z-10 flex w-full min-h-[152px] items-stretch py-2">
-                  <div className="flex-[0_0_41%] w-[41%] max-w-[41%] box-border flex flex-col items-center justify-center gap-1.5 px-3 text-center">
+                  <div className="flex-[0_0_41%] w-[41%] max-w-[41%] box-border flex flex-col items-center justify-center gap-2 px-3 py-1 text-center">
                     <div
                       onClick={() => logoInputRef.current?.click()}
-                      className="cursor-pointer group relative flex flex-col items-center"
+                      className="group flex w-full min-h-[4.5rem] cursor-pointer items-center justify-center"
                       title="Click to upload logo"
                     >
                       {pdfTemplate.companyInfo.logoUrl ? (
@@ -990,13 +990,15 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                           />
                         </div>
                       ) : (
-                        <div className="w-14 h-14 bg-[#004a8d] rounded-full flex items-center justify-center p-2 shadow-lg group-hover:bg-[#003366] transition-colors">
-                          <svg className="w-full h-full text-white" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                        <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-[#004a8d] p-2 shadow-lg transition-colors group-hover:bg-[#003366]">
+                          <svg className="h-9 w-9 text-white" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                          </svg>
                         </div>
                       )}
                     </div>
 
-                    <div className="flex flex-col items-center gap-1 w-full min-w-0">
+                    <div className="flex w-full flex-col items-center gap-1 min-w-0">
                       <input
                         type="text"
                         value={pdfTemplate.companyInfo.brandName ?? ''}
@@ -1011,11 +1013,6 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                         }}
                         className="w-full bg-transparent border-b border-dashed border-slate-200 hover:border-indigo-300 focus:border-indigo-500 outline-none uppercase leading-none tracking-tight text-center"
                       />
-                      {!pdfTemplate.companyInfo.logoUrl && (
-                        <p className="text-[8pt] font-medium italic text-slate-500 text-center">
-                          Upload image logo here directly
-                        </p>
-                      )}
                       <textarea
                         value={pdfTemplate.companyInfo.name}
                         onChange={(e) => handleUpdateTemplateField('companyInfo.name', e.target.value)}

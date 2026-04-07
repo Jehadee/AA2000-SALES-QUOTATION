@@ -204,45 +204,49 @@ const PreviewModal: React.FC<Props> = ({
               )}
 
               <div className="relative z-10 flex w-full min-h-[152px] items-stretch py-2">
-                <div className="flex-[0_0_41%] w-[41%] max-w-[41%] box-border flex flex-col items-center justify-center gap-1.5 px-3 text-center">
-                  {template.companyInfo.logoUrl && (
-                    <div
-                      style={{
-                        transform: `translate(${template.companyInfo.logoXOffset || 0}px, ${template.companyInfo.logoYOffset || 0}px)`,
-                      }}
-                      className="shrink-0 flex justify-center"
-                    >
-                      <img
-                        src={template.companyInfo.logoUrl}
-                        alt="Logo"
+                <div className="flex-[0_0_41%] w-[41%] max-w-[41%] box-border flex flex-col items-center justify-center gap-2 px-3 py-1 text-center">
+                  <div className="flex w-full min-h-[4.5rem] items-center justify-center shrink-0">
+                    {template.companyInfo.logoUrl ? (
+                      <div
                         style={{
-                          width: `${template.companyInfo.logoWidth ?? 96}px`,
-                          maxWidth: 'min(120px, 85%)',
+                          transform: `translate(${template.companyInfo.logoXOffset || 0}px, ${template.companyInfo.logoYOffset || 0}px)`,
                         }}
-                        className="h-auto object-contain"
-                      />
-                    </div>
-                  )}
-
-                  <div className="flex flex-col items-center gap-0.5 w-full min-w-0">
-                    <h1
-                      style={{
-                        fontSize: `${template.companyInfo.companyNameStyle?.fontSize ?? 22}pt`,
-                        color: template.companyInfo.companyNameStyle?.color || '#004a8d',
-                        fontWeight: template.companyInfo.companyNameStyle?.fontWeight || '900',
-                        fontFamily: template.companyInfo.companyNameStyle?.fontFamily || 'Inter',
-                        fontStyle: template.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
-                      }}
-                      className="tracking-tight leading-none uppercase whitespace-pre-wrap"
-                    >
-                      {pdfHeaderBrand}
-                    </h1>
-                    {!template.companyInfo.logoUrl && (
-                      <p className="text-[8pt] font-medium italic text-slate-500 leading-snug max-w-[95%] text-center">
-                        Upload image logo here directly
-                      </p>
+                        className="flex justify-center"
+                      >
+                        <img
+                          src={template.companyInfo.logoUrl}
+                          alt="Logo"
+                          style={{
+                            width: `${template.companyInfo.logoWidth ?? 96}px`,
+                            maxWidth: 'min(120px, 85%)',
+                          }}
+                          className="h-auto object-contain"
+                        />
+                      </div>
+                    ) : (
+                      <div
+                        className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-[#004a8d] shadow-md"
+                        aria-hidden
+                      >
+                        <svg className="h-9 w-9 text-white" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                        </svg>
+                      </div>
                     )}
                   </div>
+
+                  <h1
+                    style={{
+                      fontSize: `${template.companyInfo.companyNameStyle?.fontSize ?? 22}pt`,
+                      color: template.companyInfo.companyNameStyle?.color || '#004a8d',
+                      fontWeight: template.companyInfo.companyNameStyle?.fontWeight || '900',
+                      fontFamily: template.companyInfo.companyNameStyle?.fontFamily || 'Inter',
+                      fontStyle: template.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
+                    }}
+                    className="w-full min-w-0 tracking-tight leading-none uppercase whitespace-pre-wrap"
+                  >
+                    {pdfHeaderBrand}
+                  </h1>
                 </div>
 
                 <div className="flex-1 min-w-0 flex flex-col justify-center items-stretch text-center text-white px-5 sm:px-6 space-y-0.5 self-center">

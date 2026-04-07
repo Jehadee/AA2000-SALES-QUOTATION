@@ -195,3 +195,33 @@ export interface SystemBackup {
   logs: AdminLog[];
   pdfTemplate?: PDFTemplate;
 }
+
+/** Employee row linked to Account (acc_ID); aligns with Sequelize Employee model. */
+export interface SessionEmployeeProfile {
+  Emp_ID?: number | string | null;
+  Emp_IDno?: string | null;
+  Emp_fname?: string | null;
+  Emp_mname?: string | null;
+  Emp_lname?: string | null;
+  Emp_cnum?: string | null;
+  Emp_email?: string | null;
+  Emp_AddressID?: number | string | null;
+  Emp_role?: number | string | null;
+  acc_ID?: number | string | null;
+  Emp_imageBase64?: string | null;
+}
+
+/** Normalized view for UI after session API verification. */
+export interface SessionUserProfile {
+  sessionId: number | string | null;
+  sessionToken: string | null;
+  sessionCreatedAt?: string | null;
+  acc_ID: number | string | null;
+  username: string | null;
+  role_ID: number | string | null;
+  role_name: string | null;
+  status: string | null;
+  employee: SessionEmployeeProfile | null;
+  displayName: string;
+  initials: string;
+}

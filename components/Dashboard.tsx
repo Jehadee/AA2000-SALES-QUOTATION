@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, Inbox, PanelLeftClose, PanelLeft } from 'lucide-react';
-import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile } from '../types';
+import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, Inbox, PanelLeftClose, PanelLeft, User } from 'lucide-react';
+import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile, SessionUserProfile } from '../types';
 import { PRODUCTS, COMPANY_DETAILS, DEFAULT_PDF_TEMPLATE, INITIAL_CUSTOMER } from '../constants';
 import { processConversation } from '../services/geminiService';
 import { db, saveCatalog, savePipeline, saveAdminLogs, saveSettings, getSettings, saveCurrentAppState, getCurrentAppState } from '../services/db';
@@ -21,10 +21,14 @@ import { deriveTierPricesFromBasePrice } from '../services/pricing';
 import * as XLSX from 'xlsx';
 import { fetchAllyOpportunities } from '../services/allyOpportunitiesApi';
 import { fetchEstimationFiles, type EstimationFileRecord } from '../services/estimationApi';
+import ProfileScreen from './ProfileScreen';
 
 interface DashboardProps {
   onLogout: () => void;
   userRole: UserRole;
+  sessionProfile: SessionUserProfile | null;
+  onRefreshSessionProfile: () => Promise<void>;
+  isRefreshingProfile: boolean;
 }
 
 export interface Message {
@@ -33,7 +37,13 @@ export interface Message {
   attachments?: { type: string; data: string; name?: string }[];
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
+const Dashboard: React.FC<DashboardProps> = ({
+  onLogout,
+  userRole,
+  sessionProfile,
+  onRefreshSessionProfile,
+  isRefreshingProfile,
+}) => {
   const [items, setItems] = useState<SelectedItem[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [laborServices, setLaborServices] = useState<LaborService[]>([]);
@@ -43,7 +53,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   const [discountType, setDiscountType] = useState<'percentage' | 'fixed'>('percentage');
   const [showVat, setShowVat] = useState<boolean>(true);
   const [currentStatus, setCurrentStatus] = useState<QuotationStatus>(QuotationStatus.INQUIRY);
-  const [activeTab, setActiveTab] = useState<'estimation' | 'quotation' | 'draft' | 'pipeline' | 'admin'>('estimation');
+  const [activeTab, setActiveTab] = useState<
+    'estimation' | 'quotation' | 'draft' | 'pipeline' | 'profile' | 'admin'
+  >('estimation');
   
   const [messages, setMessages] = useState<Message[]>([
     { role: 'model', content: "Hello! I'm your AA2000 Sales Assistant. I can help you build quotations faster. Just tell me what products you need, or upload a photo of a hand-written BOM or an Excel file!" }
@@ -1047,6 +1059,19 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                   </div>
                 </button>
 
+                <button
+                  onClick={() => setActiveTab('profile')}
+                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'profile' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
+                >
+                  <div className={`p-2 rounded-lg transition-colors ${activeTab === 'profile' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
+                    <User size={18} />
+                  </div>
+                  <div className="text-left">
+                    <span className="block font-bold">Profile</span>
+                    <span className="block text-[10px] opacity-60 font-normal mt-0.5">SESSION &amp; ACCOUNT</span>
+                  </div>
+                </button>
+
                 {userRole === 'ADMIN' && (
                   <button
                     onClick={() => setActiveTab('admin')}
@@ -1068,21 +1093,44 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
 
         <div className="mt-auto p-6 border-t border-slate-800/50">
           <div className="flex items-center justify-between group">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800">
-                {userRole === 'ADMIN' ? 'SA' : 'SE'}
+            <button
+              type="button"
+              onClick={() => setActiveTab('profile')}
+              className="flex items-center gap-3 text-left min-w-0 rounded-xl p-1 -m-1 hover:bg-slate-800/50 transition-colors flex-1 mr-2"
+              title="View profile"
+            >
+              <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800 shrink-0 overflow-hidden">
+                {sessionProfile?.employee?.Emp_imageBase64 ? (
+                  <img
+                    src={
+                      sessionProfile.employee.Emp_imageBase64.startsWith('data:')
+                        ? sessionProfile.employee.Emp_imageBase64
+                        : `data:image/jpeg;base64,${sessionProfile.employee.Emp_imageBase64}`
+                    }
+                    alt=""
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  sessionProfile?.initials ?? (userRole === 'ADMIN' ? 'SA' : 'SE')
+                )}
               </div>
-              <div>
-                <p className="text-xs font-bold text-white">
-                  {userRole === 'ADMIN' ? 'System Admin' : 'Sales Employee'}
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-white truncate">
+                  {sessionProfile?.displayName ??
+                    (userRole === 'ADMIN' ? 'System Admin' : 'Sales Employee')}
                 </p>
                 <p className="text-[9px] text-emerald-400 font-bold tracking-wider uppercase flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
                   Signed In
                 </p>
               </div>
-            </div>
-            <button onClick={onLogout} className="p-2 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-all">
+            </button>
+            <button
+              onClick={onLogout}
+              title="Back to One App"
+              aria-label="Back to One App"
+              className="p-2 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-all"
+            >
               <LogOut size={18} />
             </button>
           </div>
@@ -1580,6 +1628,30 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
               </div>
             </div>
           </div>
+        )}
+
+        {activeTab === 'profile' && (
+          <>
+            {sessionProfile ? (
+              <ProfileScreen
+                profile={sessionProfile}
+                isRefreshing={isRefreshingProfile}
+                onRefresh={() => void onRefreshSessionProfile()}
+              />
+            ) : (
+              <div className="p-8 max-w-3xl mx-auto min-h-full flex flex-col items-center justify-center gap-4">
+                <p className="text-sm text-slate-600 font-medium">Loading your profile…</p>
+                <button
+                  type="button"
+                  onClick={() => void onRefreshSessionProfile()}
+                  className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-indigo-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-indigo-500"
+                >
+                  <RefreshCw size={14} className={isRefreshingProfile ? 'animate-spin' : ''} />
+                  Retry
+                </button>
+              </div>
+            )}
+          </>
         )}
 
         {activeTab === 'admin' && (

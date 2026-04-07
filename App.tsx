@@ -1,18 +1,12 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Dashboard from './components/Dashboard';
-import { UserRole } from './types';
-
-type VerifyLaunchResponse = {
-  session?: {
-    s_ID?: number | string | null;
-    s_name?: string | null;
-  };
-  account?: {
-    role_name?: string | null;
-    role_ID?: number | string | null;
-  };
-};
+import { UserRole, type SessionUserProfile } from './types';
+import {
+  isCompleteSessionPayload,
+  normalizeSessionVerifyResponse,
+  type SessionVerifyPayload,
+} from './services/sessionProfile';
 
 type SessionBridgeMessage = {
   type?: string;
@@ -20,6 +14,7 @@ type SessionBridgeMessage = {
   sessionId?: string | number;
   roleName?: string;
   account?: {
+    acc_ID?: string | number | null;
     role_name?: string | null;
   };
   session?: {
@@ -30,8 +25,10 @@ type SessionBridgeMessage = {
 
 const SESSION_TOKEN_ENC_KEY = 'sessionTokenEnc';
 const SESSION_ID_ENC_KEY = 'sessionIdEnc';
+const ACCOUNT_ID_ENC_KEY = 'accountIdEnc';
 const SESSION_TOKEN_LEGACY_KEY = 'sessionToken';
 const SESSION_ID_LEGACY_KEY = 'sessionId';
+const ACCOUNT_ID_LEGACY_KEY = 'accountId';
 const SESSION_STORAGE_CRYPTO_KEY = 'sessionStorageCryptoKeyV1';
 
 function normalizeUserRole(input?: string | null): UserRole {
@@ -77,13 +74,93 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
+const PORTAL_DEV_KEY_SEED = 'aa2000-portal-launch-dev-v1';
+
+/** Matches portal `appendSessionToUrl`: 64 hex chars or standard Base64 (decode must be 32 bytes). */
+function parsePortalLaunchAesKeyMaterial(envValue: string): Uint8Array | null {
+  const s = envValue.trim();
+  if (!s) return null;
+  if (/^[0-9a-fA-F]{64}$/.test(s)) {
+    const out = new Uint8Array(32);
+    for (let i = 0; i < 32; i += 1) {
+      out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
+    }
+    return out;
+  }
+  try {
+    const bytes = base64ToBytes(base64UrlToBase64(s));
+    if (bytes.length !== 32) return null;
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+async function getPortalLaunchRawKeyBytes(): Promise<Uint8Array | null> {
+  const env = (import.meta as any).env ?? {};
+  const rawEnv = String(env.VITE_LAUNCH_AES_KEY ?? '').trim();
+  if (rawEnv) {
+    return parsePortalLaunchAesKeyMaterial(rawEnv);
+  }
+  // Dev parity with portal (`npm run dev` without env key): SHA-256(UTF-8 dev string).
+  const isViteDev = (import.meta as any).env?.DEV === true;
+  if (isViteDev) {
+    const seed = new TextEncoder().encode(PORTAL_DEV_KEY_SEED);
+    const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(seed));
+    return new Uint8Array(digest);
+  }
+  return null;
+}
+
+async function importPortalLaunchCryptoKey(): Promise<CryptoKey | null> {
+  const raw = await getPortalLaunchRawKeyBytes();
+  if (!raw) return null;
+  return crypto.subtle.importKey('raw', toArrayBuffer(raw), { name: 'AES-GCM' }, false, ['decrypt']);
+}
+
+/**
+ * Portal encoding: base64url → bytes; IV 12 | (ciphertext + 16-byte tag); AES-256-GCM.
+ * Same layout for `__launch` (session s_name) and `__actor` (acc_ID as string).
+ */
+async function decryptPortalLaunchParam(b64urlToken: string): Promise<string | null> {
+  const trimmed = String(b64urlToken ?? '').trim();
+  if (!trimmed) return null;
+  const c = globalThis.crypto;
+  if (!c?.subtle) return null;
+
+  let payload: Uint8Array;
+  try {
+    payload = base64UrlToBytes(trimmed);
+  } catch {
+    return null;
+  }
+  if (payload.length < 12 + 16) return null;
+
+  const key = await importPortalLaunchCryptoKey();
+  if (!key) return null;
+
+  const iv = payload.slice(0, 12);
+  const cipherWithTag = payload.slice(12);
+  try {
+    const plain = await c.subtle.decrypt(
+      { name: 'AES-GCM', iv: toArrayBuffer(iv), tagLength: 128 },
+      key,
+      toArrayBuffer(cipherWithTag)
+    );
+    return new TextDecoder().decode(plain);
+  } catch {
+    return null;
+  }
+}
+
 async function deriveAesKeyFromSecret(secret: string): Promise<CryptoKey> {
   const secretBytes = new TextEncoder().encode(secret);
   const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(secretBytes));
   return crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, ['decrypt']);
 }
 
-async function decryptLaunchToken(token: string): Promise<string> {
+/** Legacy receiver: SHA-256(VITE_LAUNCH_TOKEN_SECRET || aa2k-launch-secret-v1), same IV||cipher layout. */
+async function decryptLaunchTokenLegacy(token: string): Promise<string> {
   const launchSecret =
     String((import.meta as any).env?.VITE_LAUNCH_TOKEN_SECRET ?? '').trim() ||
     'aa2k-launch-secret-v1';
@@ -96,7 +173,7 @@ async function decryptLaunchToken(token: string): Promise<string> {
   const cipher = payload.slice(12);
   const key = await deriveAesKeyFromSecret(launchSecret);
   const plain = await c.subtle.decrypt(
-    { name: 'AES-GCM', iv: toArrayBuffer(iv) },
+    { name: 'AES-GCM', iv: toArrayBuffer(iv), tagLength: 128 },
     key,
     toArrayBuffer(cipher)
   );
@@ -142,11 +219,14 @@ async function normalizeIncomingLaunchToken(rawToken: string): Promise<string> {
   const value = rawToken ?? '';
   if (!value) return '';
 
-  // Primary receiver-compatible mode:
-  // token is base64url(payload), first 12 bytes = IV, rest = AES-GCM cipher, key = SHA-256(secret)
+  // 0) Portal appendSessionToUrl: VITE_LAUNCH_AES_KEY (hex/base64) or dev SHA-256(aa2000-portal-launch-dev-v1)
+  const portalPlain = await decryptPortalLaunchParam(value);
+  if (portalPlain) return portalPlain;
+
+  // Legacy receiver: token is base64url, IV||cipher+tag, key = SHA-256(VITE_LAUNCH_TOKEN_SECRET || aa2k-...)
   if (mode === 'receiver' || mode === 'aes-gcm-payload' || mode === 'aes-gcm' || mode === '') {
     try {
-      const decrypted = await decryptLaunchToken(value);
+      const decrypted = await decryptLaunchTokenLegacy(value);
       if (decrypted) return decrypted;
     } catch {
       // continue to compatibility fallbacks below
@@ -242,7 +322,12 @@ async function setSessionIdSecure(sessionId: string): Promise<void> {
   sessionStorage.removeItem(SESSION_ID_LEGACY_KEY);
 }
 
-function resolveRoleFromSessionPayload(data: VerifyLaunchResponse): UserRole {
+async function setAccountIdSecure(accountId: string): Promise<void> {
+  await setEncryptedSessionValue(ACCOUNT_ID_ENC_KEY, accountId);
+  sessionStorage.removeItem(ACCOUNT_ID_LEGACY_KEY);
+}
+
+function resolveRoleFromSessionPayload(data: SessionVerifyPayload): UserRole {
   const roleName = data.account?.role_name;
   if (roleName && String(roleName).trim()) {
     return normalizeUserRole(roleName);
@@ -340,15 +425,31 @@ function getRawQueryParam(search: string, key: string): string | null {
 
 function getTokenFromCurrentUrl(): string {
   const search = window.location.search || '';
-  const keys = ['__launch', 'launchToken', 'sessionToken', 'token'];
+  // Encrypted: __launch / _launch; plain (no AES key on portal): s_name
+  const keys = ['__launch', '_launch', 'launchToken', 'sessionToken', 'token', 's_name'];
   for (const key of keys) {
     const raw = getRawQueryParam(search, key);
     if (raw !== null) return raw; // do not trim/alter
   }
 
-  // Support path-style launch links, e.g. "/__launch=TOKEN"
+  // Path-style launch links, e.g. "/__launch=TOKEN" or "/_launch=TOKEN"
   const path = window.location.pathname || '';
-  const pathMatch = path.match(/\/__launch=([^/?#]+)/);
+  const pathMatch = path.match(/\/(?:__launch|_launch)=([^/?#]+)/);
+  if (pathMatch && pathMatch[1] != null) return pathMatch[1];
+
+  return '';
+}
+
+function getAccountIdFromCurrentUrl(): string {
+  const search = window.location.search || '';
+  const keys = ['__actor', 'acc_ID', 'accId', 'accountId', 'acc_id'];
+  for (const key of keys) {
+    const raw = getRawQueryParam(search, key);
+    if (raw !== null) return raw; // keep exact raw value
+  }
+
+  const path = window.location.pathname || '';
+  const pathMatch = path.match(/\/(?:__actor|acc_ID|accId|accountId|acc_id)=([^/?#]+)/);
   if (pathMatch && pathMatch[1] != null) return pathMatch[1];
 
   return '';
@@ -357,13 +458,24 @@ function getTokenFromCurrentUrl(): string {
 function getSanitizedUrlWithoutLaunchToken(): string {
   const params = new URLSearchParams(window.location.search || '');
   params.delete('__launch');
+  params.delete('_launch');
+  params.delete('__actor');
+  params.delete('s_name');
+  params.delete('acc_ID');
+  params.delete('accId');
+  params.delete('accountId');
+  params.delete('acc_id');
   params.delete('launchToken');
   params.delete('sessionToken');
   params.delete('token');
 
   let pathname = window.location.pathname || '/';
-  // Remove path-style launch token: "/__launch=TOKEN"
+  // Remove path-style launch/account token segments.
   pathname = pathname.replace(/\/__launch=[^/?#]+/, '');
+  pathname = pathname.replace(/\/_launch=[^/?#]+/, '');
+  pathname = pathname.replace(/\/__actor=[^/?#]+/, '');
+  pathname = pathname.replace(/\/s_name=[^/?#]+/, '');
+  pathname = pathname.replace(/\/(?:acc_ID|accId|accountId|acc_id)=[^/?#]+/, '');
   if (!pathname.startsWith('/')) pathname = `/${pathname}`;
   if (!pathname) pathname = '/';
 
@@ -372,20 +484,35 @@ function getSanitizedUrlWithoutLaunchToken(): string {
   return `${pathname}${qs ? `?${qs}` : ''}${hash}`;
 }
 
-async function verifyLaunchToken(launchToken: string): Promise<VerifyLaunchResponse | null> {
+function verifyLaunchUrlCandidates(launchUrlOverride: string, launchToken: string): string[] {
+  const encoded = encodeURIComponent(launchToken);
+  let primary: string;
+  if (launchUrlOverride.includes('{token}')) {
+    primary = launchUrlOverride.replaceAll('{token}', encoded);
+  } else {
+    primary = `${launchUrlOverride}${launchUrlOverride.includes('?') ? '&' : '?'}${new URLSearchParams({ __launch: launchToken }).toString()}`;
+  }
+  const variants = [primary];
+  if (primary.includes('__launch=')) {
+    variants.push(primary.replace(/__launch=/g, '_launch='));
+  }
+  return Array.from(new Set(variants));
+}
+
+async function verifyLaunchToken(launchToken: string): Promise<SessionVerifyPayload | null> {
   const env = (import.meta as any).env ?? {};
   const launchUrlOverride = String(env.VITE_VERIFY_LAUNCH_URL ?? '').trim();
   if (launchUrlOverride) {
-    const url = launchUrlOverride.includes('{token}')
-      ? launchUrlOverride.replace('{token}', encodeURIComponent(launchToken))
-      : `${launchUrlOverride}${launchUrlOverride.includes('?') ? '&' : '?'}${new URLSearchParams({ __launch: launchToken }).toString()}`;
-    try {
-      const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } });
-      if (!res.ok) return null;
-      return (await res.json()) as VerifyLaunchResponse;
-    } catch {
-      return null;
+    for (const url of verifyLaunchUrlCandidates(launchUrlOverride, launchToken)) {
+      try {
+        const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } });
+        if (!res.ok) continue;
+        return (await res.json()) as SessionVerifyPayload;
+      } catch {
+        // try next variant
+      }
     }
+    return null;
   }
 
   const routeRaw = String(env.VITE_VERIFY_LAUNCH_PATH ?? '/verify-launch').trim();
@@ -393,22 +520,25 @@ async function verifyLaunchToken(launchToken: string): Promise<VerifyLaunchRespo
   const candidates = getApiBaseCandidates('auth');
   if (candidates.length === 0) return null;
 
-  const qs = new URLSearchParams({ __launch: launchToken }).toString();
+  const launchQueryKeys = ['__launch', '_launch'] as const;
   const strictRoutes = parseBooleanEnv(env.VITE_AUTH_STRICT_ROUTES);
   const paths = strictRoutes === true
     ? Array.from(new Set([route, withPrefix(route)]))
     : buildRouteCandidates(route, ['/auth', '/login', '/account']);
 
-  for (const base of candidates) {
-    for (const path of paths) {
-      const url = `${base}${path}?${qs}`;
-      try {
-        const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } });
-        if (!res.ok) continue;
-        const data = (await res.json()) as VerifyLaunchResponse;
-        return data;
-      } catch {
-        // try the next candidate endpoint
+  for (const launchKey of launchQueryKeys) {
+    const qs = new URLSearchParams({ [launchKey]: launchToken }).toString();
+    for (const base of candidates) {
+      for (const path of paths) {
+        const url = `${base}${path}?${qs}`;
+        try {
+          const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } });
+          if (!res.ok) continue;
+          const data = (await res.json()) as SessionVerifyPayload;
+          return data;
+        } catch {
+          // try the next candidate endpoint
+        }
       }
     }
   }
@@ -416,7 +546,7 @@ async function verifyLaunchToken(launchToken: string): Promise<VerifyLaunchRespo
   return null;
 }
 
-async function verifySessionToken(sessionToken: string): Promise<VerifyLaunchResponse | null> {
+async function verifySessionToken(sessionToken: string): Promise<SessionVerifyPayload | null> {
   const env = (import.meta as any).env ?? {};
   const sessionUrlOverride = String(env.VITE_VERIFY_SESSION_URL ?? '').trim();
   if (sessionUrlOverride) {
@@ -426,7 +556,7 @@ async function verifySessionToken(sessionToken: string): Promise<VerifyLaunchRes
     try {
       const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } });
       if (!res.ok) return null;
-      return (await res.json()) as VerifyLaunchResponse;
+      return (await res.json()) as SessionVerifyPayload;
     } catch {
       return null;
     }
@@ -451,7 +581,7 @@ async function verifySessionToken(sessionToken: string): Promise<VerifyLaunchRes
       try {
         const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } });
         if (!res.ok) continue;
-        const data = (await res.json()) as VerifyLaunchResponse;
+        const data = (await res.json()) as SessionVerifyPayload;
         return data;
       } catch {
         // try next endpoint candidate
@@ -467,6 +597,49 @@ const App: React.FC = () => {
   const [isVerifyingLaunch, setIsVerifyingLaunch] = useState<boolean>(false);
   const [hasValidSession, setHasValidSession] = useState<boolean>(false);
   const [authCheckTick, setAuthCheckTick] = useState<number>(0);
+  const [sessionProfile, setSessionProfile] = useState<SessionUserProfile | null>(null);
+  const [isRefreshingProfile, setIsRefreshingProfile] = useState(false);
+
+  const persistVerifiedSession = useCallback(async (data: SessionVerifyPayload) => {
+    const resolvedRole = resolveRoleFromSessionPayload(data);
+    setUserRole(resolvedRole);
+    setHasValidSession(true);
+    setSessionProfile(normalizeSessionVerifyResponse(data));
+    try {
+      localStorage.setItem('userRole', resolvedRole);
+      if (data.session?.s_ID != null) {
+        await setSessionIdSecure(String(data.session.s_ID));
+      }
+      if (data.account?.acc_ID != null) {
+        await setAccountIdSecure(String(data.account.acc_ID));
+      }
+    } catch {
+      // ignore storage restrictions
+    }
+  }, []);
+
+  const refreshSessionProfile = useCallback(async () => {
+    setIsRefreshingProfile(true);
+    try {
+      let storedSessionToken = '';
+      try {
+        storedSessionToken = await getSessionTokenSecure();
+      } catch {
+        // ignore
+      }
+      if (!storedSessionToken) return;
+
+      let sessionData = await verifySessionToken(storedSessionToken);
+      if (!isCompleteSessionPayload(sessionData)) {
+        sessionData = await verifyLaunchToken(storedSessionToken);
+      }
+      if (isCompleteSessionPayload(sessionData)) {
+        await persistVerifiedSession(sessionData);
+      }
+    } finally {
+      setIsRefreshingProfile(false);
+    }
+  }, [persistVerifiedSession]);
 
   useEffect(() => {
     const onSessionMessage = (event: MessageEvent) => {
@@ -480,6 +653,7 @@ const App: React.FC = () => {
           ''
       ).trim();
       const sid = data.sessionId ?? data.session?.s_ID;
+      const accId = data.account?.acc_ID;
       const roleInput = data.roleName ?? data.account?.role_name ?? '';
 
       if (!token) return;
@@ -489,6 +663,7 @@ const App: React.FC = () => {
           if (!normalizedToken) return;
           await setSessionTokenSecure(normalizedToken);
           if (sid != null) await setSessionIdSecure(String(sid));
+          if (accId != null) await setAccountIdSecure(String(accId));
           if (roleInput) localStorage.setItem('userRole', normalizeUserRole(roleInput));
         } catch {
           // ignore storage restrictions
@@ -507,6 +682,7 @@ const App: React.FC = () => {
       setIsVerifyingLaunch(true);
       try {
         const launchToken = getTokenFromCurrentUrl();
+        const accountIdFromUrl = getAccountIdFromCurrentUrl();
 
         // Step 1: If launch token exists in URL, store it first in sessionStorage.
         if (launchToken) {
@@ -514,6 +690,12 @@ const App: React.FC = () => {
             const normalizedToken = await normalizeIncomingLaunchToken(launchToken);
             if (normalizedToken) {
               await setSessionTokenSecure(normalizedToken);
+            }
+            if (accountIdFromUrl) {
+              const normalizedActor = await normalizeIncomingLaunchToken(accountIdFromUrl);
+              if (normalizedActor) {
+                await setAccountIdSecure(normalizedActor);
+              }
             }
           } catch {
             // ignore storage restrictions
@@ -532,34 +714,22 @@ const App: React.FC = () => {
 
         if (storedSessionToken) {
           const sessionData = await verifySessionToken(storedSessionToken);
-          if (!cancelled && sessionData?.account && sessionData?.session?.s_ID != null) {
-            const resolvedRole = resolveRoleFromSessionPayload(sessionData);
-            setUserRole(resolvedRole);
-            setHasValidSession(true);
-            try {
-              localStorage.setItem('userRole', resolvedRole);
-              await setSessionIdSecure(String(sessionData.session.s_ID));
-            } catch {
-              // ignore
-            }
+          if (!cancelled && isCompleteSessionPayload(sessionData)) {
+            await persistVerifiedSession(sessionData);
             return;
           }
 
           // Fallback: some backends only expose verify-launch route.
           const launchData = await verifyLaunchToken(storedSessionToken);
-          if (!cancelled && launchData?.account && launchData?.session?.s_ID != null) {
-            const resolvedRole = resolveRoleFromSessionPayload(launchData);
-            setUserRole(resolvedRole);
-            setHasValidSession(true);
+          if (!cancelled && isCompleteSessionPayload(launchData)) {
             try {
-              localStorage.setItem('userRole', resolvedRole);
               if (launchData.session?.s_name) {
                 await setSessionTokenSecure(String(launchData.session.s_name));
               }
-              await setSessionIdSecure(String(launchData.session.s_ID));
             } catch {
               // ignore
             }
+            if (!cancelled) await persistVerifiedSession(launchData);
             return;
           }
         }
@@ -567,12 +737,15 @@ const App: React.FC = () => {
         // No valid session -> block access
         if (!cancelled) {
           setHasValidSession(false);
+          setSessionProfile(null);
           if (shouldClearInvalidSession()) {
             try {
               sessionStorage.removeItem(SESSION_TOKEN_ENC_KEY);
               sessionStorage.removeItem(SESSION_ID_ENC_KEY);
+              sessionStorage.removeItem(ACCOUNT_ID_ENC_KEY);
               sessionStorage.removeItem(SESSION_TOKEN_LEGACY_KEY);
               sessionStorage.removeItem(SESSION_ID_LEGACY_KEY);
+              sessionStorage.removeItem(ACCOUNT_ID_LEGACY_KEY);
               localStorage.removeItem('userRole');
             } catch {
               // ignore
@@ -588,20 +761,13 @@ const App: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [authCheckTick]);
+  }, [authCheckTick, persistVerifiedSession]);
 
   const handleLogout = () => {
-    setUserRole('SALES');
-    setHasValidSession(false);
-    try {
-      localStorage.removeItem('userRole');
-      sessionStorage.removeItem(SESSION_TOKEN_ENC_KEY);
-      sessionStorage.removeItem(SESSION_ID_ENC_KEY);
-      sessionStorage.removeItem(SESSION_TOKEN_LEGACY_KEY);
-      sessionStorage.removeItem(SESSION_ID_LEGACY_KEY);
-    } catch (e) {
-      console.warn("Could not clear auth state", e);
-    }
+    const env = (import.meta as any).env ?? {};
+    const target = String(env.VITE_ONEAPP_RETURN_URL ?? env.VITE_ONEAPP_URL ?? 'https://aa2000portal.vercel.app').trim();
+    if (!target) return;
+    window.location.href = target;
   };
 
   if (isVerifyingLaunch) {
@@ -618,14 +784,27 @@ const App: React.FC = () => {
         <div className="max-w-md text-center space-y-3">
           <h1 className="text-lg font-bold">Session required</h1>
           <p className="text-sm text-slate-300">
-            No valid session found. Open this app using a valid launch link with <code>?__launch=...</code>.
+            No valid session found. Use a portal link with encrypted{' '}
+            <code className="text-slate-200">__launch</code> / <code className="text-slate-200">__actor</code>, or plain{' '}
+            <code className="text-slate-200">s_name</code> / <code className="text-slate-200">acc_ID</code>. Set{' '}
+            <code className="text-slate-200">VITE_LAUNCH_AES_KEY</code> in production (same as the portal). Dev uses the
+            shared SHA-256 dev key. Ensure <code className="text-slate-200">VITE_VERIFY_SESSION_URL</code> /{' '}
+            <code className="text-slate-200">VITE_VERIFY_LAUNCH_URL</code> reach your API.
           </p>
         </div>
       </div>
     );
   }
 
-  return <Dashboard onLogout={handleLogout} userRole={userRole} />;
+  return (
+    <Dashboard
+      onLogout={handleLogout}
+      userRole={userRole}
+      sessionProfile={sessionProfile}
+      onRefreshSessionProfile={refreshSessionProfile}
+      isRefreshingProfile={isRefreshingProfile}
+    />
+  );
 };
 
 export default App;

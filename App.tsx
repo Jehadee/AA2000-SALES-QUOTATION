@@ -31,6 +31,20 @@ const SESSION_ID_LEGACY_KEY = 'sessionId';
 const ACCOUNT_ID_LEGACY_KEY = 'accountId';
 const SESSION_STORAGE_CRYPTO_KEY = 'sessionStorageCryptoKeyV1';
 
+function isAuthDebugEnabled(): boolean {
+  const raw = String((import.meta as any).env?.VITE_AUTH_DEBUG ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function authDebugLog(label: string, details?: Record<string, unknown>): void {
+  if (!isAuthDebugEnabled()) return;
+  if (details) {
+    console.info(`[AUTH_DEBUG] ${label}`, details);
+    return;
+  }
+  console.info(`[AUTH_DEBUG] ${label}`);
+}
+
 function normalizeUserRole(input?: string | null): UserRole {
   const role = String(input || '').trim().toUpperCase();
   if (role.includes('ADMIN')) return 'ADMIN';
@@ -100,15 +114,19 @@ async function getPortalLaunchRawKeyBytes(): Promise<Uint8Array | null> {
   const env = (import.meta as any).env ?? {};
   const rawEnv = String(env.VITE_LAUNCH_AES_KEY ?? '').trim();
   if (rawEnv) {
-    return parsePortalLaunchAesKeyMaterial(rawEnv);
+    const parsed = parsePortalLaunchAesKeyMaterial(rawEnv);
+    authDebugLog('launch key source=env', { parsed: !!parsed, byteLength: parsed?.length ?? 0 });
+    return parsed;
   }
   // Dev parity with portal (`npm run dev` without env key): SHA-256(UTF-8 dev string).
   const isViteDev = (import.meta as any).env?.DEV === true;
   if (isViteDev) {
+    authDebugLog('launch key source=dev-fallback-sha256');
     const seed = new TextEncoder().encode(PORTAL_DEV_KEY_SEED);
     const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(seed));
     return new Uint8Array(digest);
   }
+  authDebugLog('launch key missing (no env key, not dev)');
   return null;
 }
 
@@ -132,12 +150,19 @@ async function decryptPortalLaunchParam(b64urlToken: string): Promise<string | n
   try {
     payload = base64UrlToBytes(trimmed);
   } catch {
+    authDebugLog('portal decrypt skipped: invalid base64url');
     return null;
   }
-  if (payload.length < 12 + 16) return null;
+  if (payload.length < 12 + 16) {
+    authDebugLog('portal decrypt skipped: token too short', { length: payload.length });
+    return null;
+  }
 
   const key = await importPortalLaunchCryptoKey();
-  if (!key) return null;
+  if (!key) {
+    authDebugLog('portal decrypt skipped: no AES key');
+    return null;
+  }
 
   const iv = payload.slice(0, 12);
   const cipherWithTag = payload.slice(12);
@@ -147,8 +172,10 @@ async function decryptPortalLaunchParam(b64urlToken: string): Promise<string | n
       key,
       toArrayBuffer(cipherWithTag)
     );
+    authDebugLog('portal decrypt success', { tokenLength: trimmed.length });
     return new TextDecoder().decode(plain);
   } catch {
+    authDebugLog('portal decrypt failed');
     return null;
   }
 }
@@ -221,15 +248,22 @@ async function normalizeIncomingLaunchToken(rawToken: string): Promise<string> {
 
   // 0) Portal appendSessionToUrl: VITE_LAUNCH_AES_KEY (hex/base64) or dev SHA-256(aa2000-portal-launch-dev-v1)
   const portalPlain = await decryptPortalLaunchParam(value);
-  if (portalPlain) return portalPlain;
+  if (portalPlain) {
+    authDebugLog('normalize token branch=portal-decrypt');
+    return portalPlain;
+  }
 
   // Legacy receiver: token is base64url, IV||cipher+tag, key = SHA-256(VITE_LAUNCH_TOKEN_SECRET || aa2k-...)
   if (mode === 'receiver' || mode === 'aes-gcm-payload' || mode === 'aes-gcm' || mode === '') {
     try {
       const decrypted = await decryptLaunchTokenLegacy(value);
-      if (decrypted) return decrypted;
+      if (decrypted) {
+        authDebugLog('normalize token branch=legacy-decrypt');
+        return decrypted;
+      }
     } catch {
       // continue to compatibility fallbacks below
+      authDebugLog('legacy decrypt failed');
     }
   }
 
@@ -237,7 +271,10 @@ async function normalizeIncomingLaunchToken(rawToken: string): Promise<string> {
   const payload = value.startsWith('enc::') ? value.slice(5) : value;
   if ((mode === 'aes' || mode === 'aes-gcm' || value.startsWith('enc::') || payload.includes(':')) && secret) {
     const decrypted = await decryptAesTokenWithSecret(payload, secret);
-    if (decrypted) return decrypted;
+    if (decrypted) {
+      authDebugLog('normalize token branch=legacy-enc-pair');
+      return decrypted;
+    }
   }
 
   // 2) URL-decoded token (common when upstream applies encodeURIComponent)
@@ -248,13 +285,18 @@ async function normalizeIncomingLaunchToken(rawToken: string): Promise<string> {
     // ignore invalid URI sequences
   }
 
-  // 3) Base64/Base64URL plain text token encoding
-  if (mode === 'base64' || mode === 'base64url' || /^[A-Za-z0-9\-_+/=]+$/.test(value)) {
+  // 3) Base64/Base64URL plain text token encoding (opt-in only).
+  // Do not auto-decode arbitrary tokens, otherwise valid session strings can become garbled.
+  if (mode === 'base64' || mode === 'base64url') {
     const b64 = tryDecodeBase64Text(value);
-    if (b64) return b64;
+    if (b64) {
+      authDebugLog('normalize token branch=explicit-base64');
+      return b64;
+    }
   }
 
   // 4) Fallback to raw value
+  authDebugLog('normalize token branch=raw');
   return value;
 }
 
@@ -506,10 +548,15 @@ async function verifyLaunchToken(launchToken: string): Promise<SessionVerifyPayl
     for (const url of verifyLaunchUrlCandidates(launchUrlOverride, launchToken)) {
       try {
         const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } });
-        if (!res.ok) continue;
+        if (!res.ok) {
+          authDebugLog('verify-launch miss', { status: res.status, via: 'override' });
+          continue;
+        }
+        authDebugLog('verify-launch success', { status: res.status, via: 'override' });
         return (await res.json()) as SessionVerifyPayload;
       } catch {
         // try next variant
+        authDebugLog('verify-launch request error', { via: 'override' });
       }
     }
     return null;
@@ -533,11 +580,16 @@ async function verifyLaunchToken(launchToken: string): Promise<SessionVerifyPayl
         const url = `${base}${path}?${qs}`;
         try {
           const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } });
-          if (!res.ok) continue;
+          if (!res.ok) {
+            authDebugLog('verify-launch miss', { status: res.status, via: 'route-candidate' });
+            continue;
+          }
+          authDebugLog('verify-launch success', { status: res.status, via: 'route-candidate' });
           const data = (await res.json()) as SessionVerifyPayload;
           return data;
         } catch {
           // try the next candidate endpoint
+          authDebugLog('verify-launch request error', { via: 'route-candidate' });
         }
       }
     }
@@ -555,9 +607,14 @@ async function verifySessionToken(sessionToken: string): Promise<SessionVerifyPa
       : `${sessionUrlOverride.replace(/\/+$/, '')}/${encodeURIComponent(sessionToken)}`;
     try {
       const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        authDebugLog('verify-session miss', { status: res.status, via: 'override' });
+        return null;
+      }
+      authDebugLog('verify-session success', { status: res.status, via: 'override' });
       return (await res.json()) as SessionVerifyPayload;
     } catch {
+      authDebugLog('verify-session request error', { via: 'override' });
       return null;
     }
   }
@@ -580,11 +637,16 @@ async function verifySessionToken(sessionToken: string): Promise<SessionVerifyPa
       const url = baseOrPath;
       try {
         const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } });
-        if (!res.ok) continue;
+        if (!res.ok) {
+          authDebugLog('verify-session miss', { status: res.status, via: 'route-candidate' });
+          continue;
+        }
+        authDebugLog('verify-session success', { status: res.status, via: 'route-candidate' });
         const data = (await res.json()) as SessionVerifyPayload;
         return data;
       } catch {
         // try next endpoint candidate
+        authDebugLog('verify-session request error', { via: 'route-candidate' });
       }
     }
   }

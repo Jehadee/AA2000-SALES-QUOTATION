@@ -74,10 +74,41 @@ function getSubmitPipelineTriggerUrl(): string {
 
 export async function triggerPipelineUploadHook(payload: PipelineUploadTriggerPayload): Promise<void> {
   const url = getSubmitPipelineTriggerUrl();
+  const jsPDFLib = (window as any).jspdf;
+  const jsPDFCtor = jsPDFLib?.jsPDF || jsPDFLib;
+  if (!jsPDFCtor) {
+    throw new Error('PDF library is unavailable for pipeline upload.');
+  }
+
+  // Create a lightweight server-upload PDF when submitting to pipeline.
+  const pdf = new jsPDFCtor({ unit: 'mm', format: 'a4' });
+  const lines = [
+    'AA2000 Sales Quotation',
+    '',
+    `Reference: ${payload.quoteId}`,
+    `Customer: ${payload.customerName || '-'}`,
+    `Total: ₱${Number(payload.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+    `Created At: ${payload.createdAt || new Date().toISOString()}`,
+    '',
+    'Generated automatically during Submit to Pipeline.',
+  ];
+  let y = 20;
+  lines.forEach((line: string) => {
+    pdf.text(line, 15, y);
+    y += 7;
+  });
+  const pdfBlob: Blob = pdf.output('blob');
+
+  const formData = new FormData();
+  formData.append('file', pdfBlob, `${payload.quoteId || 'quotation'}.pdf`);
+  formData.append('quoteId', payload.quoteId || '');
+  formData.append('customerName', payload.customerName || '');
+  formData.append('total', String(payload.total ?? ''));
+  formData.append('createdAt', payload.createdAt || '');
+
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: formData,
   });
   if (!res.ok) {
     const txt = await res.text();

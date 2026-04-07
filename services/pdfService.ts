@@ -86,66 +86,85 @@ export const generateQuotationPDF = async (element: HTMLElement, filename: strin
   };
 
   try {
-    // Base capture configuration
-    const baseOptions = {
-      scale: 2, // Balanced for quality and file size
-      useCORS: true,
-      backgroundColor: '#ffffff',
-      logging: false,
-      imageTimeout: 15000,
-      windowWidth: element.scrollWidth,
-      windowHeight: element.scrollHeight
-    };
-
-    // Fallback options sanitize unsupported css color functions.
-    const sanitizedFallbackOptions = {
-      ...baseOptions,
-      foreignObjectRendering: false,
-      onclone: (clonedDoc: Document) => {
-        // html2canvas fails on unsupported color functions (`oklch` / `oklab`).
-        // To keep visual fidelity, force a safe inline value per rendered node using computed styles
-        // instead of rewriting all stylesheet tokens globally.
-        const all = clonedDoc.querySelectorAll<HTMLElement>('*');
-        all.forEach((node) => {
-          const style = (node as HTMLElement).style;
-          const computed = clonedDoc.defaultView?.getComputedStyle(node);
-          colorProps.forEach((prop) => {
-            const inlineVal = style[prop] as unknown as string;
-            const computedVal = (computed?.[prop] as unknown as string) || '';
-            const current = computedVal || inlineVal;
-            if (!current) return;
-            if (hasUnsupportedColorFn(current)) {
-              (style[prop] as unknown as string) = convertToSupportedColor(current, prop);
-            } else if (computedVal) {
-              // Lock the rendered color to avoid stylesheet parsing differences in html2canvas.
-              if (prop === 'backgroundColor' && isTransparentColor(computedVal)) {
-                (style[prop] as unknown as string) = '#ffffff';
-              } else {
-                (style[prop] as unknown as string) = computedVal;
-              }
-            }
-          });
-        });
-      }
-    };
+    // Preview UI uses CSS `transform: scale(...)` on the root; html2canvas often clips or drops
+    // the top of the layout (header) when capturing transformed nodes. Snapshot at 1:1 scale.
+    const prevTransform = element.style.transform;
+    const prevTransformOrigin = element.style.transformOrigin;
+    const prevMarginBottom = element.style.marginBottom;
 
     let canvas: HTMLCanvasElement;
     try {
-      // Primary path: rely on native browser rendering for best visual fidelity.
-      canvas = await html2canvas(element, {
+      element.style.transform = 'none';
+      element.style.transformOrigin = 'top center';
+      element.style.marginBottom = '0';
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+      // Base capture configuration
+      const baseOptions = {
+        scale: 2, // Balanced for quality and file size
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        logging: false,
+        imageTimeout: 15000,
+        windowWidth: element.scrollWidth,
+        windowHeight: element.scrollHeight,
+        x: 0,
+        y: 0,
+      };
+
+      // Fallback options sanitize unsupported css color functions.
+      const sanitizedFallbackOptions = {
         ...baseOptions,
-        foreignObjectRendering: true,
-      });
-      if (isCanvasLikelyBlank(canvas)) {
-        throw new Error('Blank canvas from foreignObject rendering');
+        foreignObjectRendering: false,
+        onclone: (clonedDoc: Document) => {
+          // html2canvas fails on unsupported color functions (`oklch` / `oklab`).
+          // To keep visual fidelity, force a safe inline value per rendered node using computed styles
+          // instead of rewriting all stylesheet tokens globally.
+          const all = clonedDoc.querySelectorAll<HTMLElement>('*');
+          all.forEach((node) => {
+            const style = (node as HTMLElement).style;
+            const computed = clonedDoc.defaultView?.getComputedStyle(node);
+            colorProps.forEach((prop) => {
+              const inlineVal = style[prop] as unknown as string;
+              const computedVal = (computed?.[prop] as unknown as string) || '';
+              const current = computedVal || inlineVal;
+              if (!current) return;
+              if (hasUnsupportedColorFn(current)) {
+                (style[prop] as unknown as string) = convertToSupportedColor(current, prop);
+              } else if (computedVal) {
+                // Lock the rendered color to avoid stylesheet parsing differences in html2canvas.
+                if (prop === 'backgroundColor' && isTransparentColor(computedVal)) {
+                  (style[prop] as unknown as string) = '#ffffff';
+                } else {
+                  (style[prop] as unknown as string) = computedVal;
+                }
+              }
+            });
+          });
+        }
+      };
+
+      try {
+        // Primary path: rely on native browser rendering for best visual fidelity.
+        canvas = await html2canvas(element, {
+          ...baseOptions,
+          foreignObjectRendering: true,
+        });
+        if (isCanvasLikelyBlank(canvas)) {
+          throw new Error('Blank canvas from foreignObject rendering');
+        }
+      } catch (primaryError) {
+        // Fallback path for environments where foreignObject rendering is unsupported
+        // or css parsing fails due oklch/oklab.
+        canvas = await html2canvas(element, sanitizedFallbackOptions);
+        if (isCanvasLikelyBlank(canvas)) {
+          throw new Error('Blank canvas from fallback rendering');
+        }
       }
-    } catch (primaryError) {
-      // Fallback path for environments where foreignObject rendering is unsupported
-      // or css parsing fails due oklch/oklab.
-      canvas = await html2canvas(element, sanitizedFallbackOptions);
-      if (isCanvasLikelyBlank(canvas)) {
-        throw new Error('Blank canvas from fallback rendering');
-      }
+    } finally {
+      element.style.transform = prevTransform;
+      element.style.transformOrigin = prevTransformOrigin;
+      element.style.marginBottom = prevMarginBottom;
     }
 
     // JPEG avoids PNG alpha/compositing artifacts (black fills) in some PDF viewers.

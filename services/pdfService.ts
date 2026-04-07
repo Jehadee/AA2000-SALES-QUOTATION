@@ -64,6 +64,21 @@ export const generateQuotationPDF = async (element: HTMLElement, filename: strin
     );
   };
 
+  const waitNextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+  const waitForImages = async (root: HTMLElement) => {
+    const imgs = Array.from(root.querySelectorAll('img'));
+    await Promise.all(
+      imgs.map((img) => {
+        if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+        return new Promise<void>((resolve) => {
+          img.addEventListener('load', () => resolve(), { once: true });
+          img.addEventListener('error', () => resolve(), { once: true });
+        });
+      }),
+    );
+  };
+
   const isCanvasLikelyBlank = (canvas: HTMLCanvasElement): boolean => {
     if (!canvas.width || !canvas.height) return true;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -86,40 +101,63 @@ export const generateQuotationPDF = async (element: HTMLElement, filename: strin
   };
 
   try {
-    // Preview UI uses CSS `transform: scale(...)` on the root; html2canvas often clips or drops
-    // the top of the layout (header) when capturing transformed nodes. Snapshot at 1:1 scale.
-    const prevTransform = element.style.transform;
-    const prevTransformOrigin = element.style.transformOrigin;
-    const prevMarginBottom = element.style.marginBottom;
+    // Capture a detached clone on `document.body`. The preview lives inside a scaled node + scrollable
+    // modal; html2canvas often mis-bounds/clips the subtree so the PDF header disappears. A fixed,
+    // off-screen clone avoids ancestor overflow/transform issues and keeps the on-screen preview unchanged.
+    const clone = element.cloneNode(true) as HTMLElement;
+    clone.style.position = 'fixed';
+    clone.style.left = '0';
+    clone.style.top = '0';
+    clone.style.zIndex = '-10000';
+    clone.style.transform = 'none';
+    clone.style.transformOrigin = 'top left';
+    clone.style.margin = '0';
+    clone.style.marginBottom = '0';
+    clone.style.pointerEvents = 'none';
+    clone.style.boxShadow = 'none';
+
+    const w = Math.max(1, Math.ceil(element.scrollWidth || element.offsetWidth));
+    clone.style.width = `${w}px`;
+
+    document.body.appendChild(clone);
 
     let canvas: HTMLCanvasElement;
     try {
-      element.style.transform = 'none';
-      element.style.transformOrigin = 'top center';
-      element.style.marginBottom = '0';
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      if (typeof document !== 'undefined' && document.fonts?.ready) {
+        try {
+          await document.fonts.ready;
+        } catch {
+          /* ignore */
+        }
+      }
+      await waitForImages(clone);
+      await waitNextFrame();
+      await waitNextFrame();
 
-      // Base capture configuration
+      const scrollW = Math.ceil(clone.scrollWidth || clone.offsetWidth);
+      const scrollH = Math.ceil(clone.scrollHeight || clone.offsetHeight);
+      const pad = 32;
+      // Clone iframe defaults to viewport size; tall quotations get clipped if these stay too small.
+      const windowWidth = Math.max(typeof window !== 'undefined' ? window.innerWidth : scrollW, scrollW) + pad;
+      const windowHeight = Math.max(typeof window !== 'undefined' ? window.innerHeight : scrollH, scrollH) + pad;
+
+      // Width/height left unset so render size follows parsed element bounds; scroll forced to origin.
       const baseOptions = {
-        scale: 2, // Balanced for quality and file size
+        scale: 2,
         useCORS: true,
         backgroundColor: '#ffffff',
         logging: false,
         imageTimeout: 15000,
-        windowWidth: element.scrollWidth,
-        windowHeight: element.scrollHeight,
-        x: 0,
-        y: 0,
+        scrollX: 0,
+        scrollY: 0,
+        windowWidth,
+        windowHeight,
       };
 
-      // Fallback options sanitize unsupported css color functions.
       const sanitizedFallbackOptions = {
         ...baseOptions,
         foreignObjectRendering: false,
         onclone: (clonedDoc: Document) => {
-          // html2canvas fails on unsupported color functions (`oklch` / `oklab`).
-          // To keep visual fidelity, force a safe inline value per rendered node using computed styles
-          // instead of rewriting all stylesheet tokens globally.
           const all = clonedDoc.querySelectorAll<HTMLElement>('*');
           all.forEach((node) => {
             const style = (node as HTMLElement).style;
@@ -132,7 +170,6 @@ export const generateQuotationPDF = async (element: HTMLElement, filename: strin
               if (hasUnsupportedColorFn(current)) {
                 (style[prop] as unknown as string) = convertToSupportedColor(current, prop);
               } else if (computedVal) {
-                // Lock the rendered color to avoid stylesheet parsing differences in html2canvas.
                 if (prop === 'backgroundColor' && isTransparentColor(computedVal)) {
                   (style[prop] as unknown as string) = '#ffffff';
                 } else {
@@ -141,12 +178,11 @@ export const generateQuotationPDF = async (element: HTMLElement, filename: strin
               }
             });
           });
-        }
+        },
       };
 
       try {
-        // Primary path: rely on native browser rendering for best visual fidelity.
-        canvas = await html2canvas(element, {
+        canvas = await html2canvas(clone, {
           ...baseOptions,
           foreignObjectRendering: true,
         });
@@ -154,17 +190,13 @@ export const generateQuotationPDF = async (element: HTMLElement, filename: strin
           throw new Error('Blank canvas from foreignObject rendering');
         }
       } catch (primaryError) {
-        // Fallback path for environments where foreignObject rendering is unsupported
-        // or css parsing fails due oklch/oklab.
-        canvas = await html2canvas(element, sanitizedFallbackOptions);
+        canvas = await html2canvas(clone, sanitizedFallbackOptions);
         if (isCanvasLikelyBlank(canvas)) {
           throw new Error('Blank canvas from fallback rendering');
         }
       }
     } finally {
-      element.style.transform = prevTransform;
-      element.style.transformOrigin = prevTransformOrigin;
-      element.style.marginBottom = prevMarginBottom;
+      clone.remove();
     }
 
     // JPEG avoids PNG alpha/compositing artifacts (black fills) in some PDF viewers.

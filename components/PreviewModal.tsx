@@ -165,15 +165,14 @@ const PreviewModal: React.FC<Props> = ({
               marginBottom: scale < 1 ? `-${(1-scale) * 100}%` : '0', 
             }}
           >
-            {/* PDF-HEADER SECTION — gradient instead of skewed boxes so html2canvas captures reliably */}
+            {/* PDF-HEADER — solid rectangles only (gradients/skew often rasterize as white in html2canvas, hiding white-on-blue contact text). */}
             <div className="pdf-header relative bg-white overflow-hidden h-[130px] border-b-2 border-black">
+              <div className="absolute top-0 left-0 h-full w-[45%] bg-white z-0 pointer-events-none" aria-hidden />
+              <div className="absolute top-0 right-0 bottom-0 left-[45%] bg-[#004a8d] z-[1] pointer-events-none" aria-hidden />
               <div
-                className="absolute inset-0 z-0 pointer-events-none"
+                className="absolute top-0 bottom-0 z-[1] pointer-events-none bg-[#031b33]"
+                style={{ left: '45%', width: '2.5%' }}
                 aria-hidden
-                style={{
-                  background:
-                    'linear-gradient(112deg, #ffffff 0%, #ffffff 36%, #031b33 36%, #031b33 39.5%, #004a8d 39.5%, #004a8d 100%)',
-                }}
               />
               
               {/* Header Image (Product Showcase) */}

@@ -934,11 +934,28 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                       <div className="flex items-center gap-6">
                         <div className="flex flex-col gap-1">
                           <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Logo Size</span>
-                          <input type="range" min="50" max="600" value={pdfTemplate.companyInfo.logoWidth || 200} onChange={(e) => handleUpdateTemplateField('companyInfo.logoWidth', parseInt(e.target.value))} className="w-24 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
-                        </div>
-                        <div className="flex flex-col gap-1">
-                          <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">X-Offset</span>
-                          <input type="range" min="-100" max="100" value={pdfTemplate.companyInfo.logoXOffset || 0} onChange={(e) => handleUpdateTemplateField('companyInfo.logoXOffset', parseInt(e.target.value))} className="w-24 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="range"
+                              min="50"
+                              max="600"
+                              value={pdfTemplate.companyInfo.logoWidth || 200}
+                              onChange={(e) => handleUpdateTemplateField('companyInfo.logoWidth', parseInt(e.target.value))}
+                              className="w-24 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                            />
+                            <input
+                              type="number"
+                              min="50"
+                              max="600"
+                              value={pdfTemplate.companyInfo.logoWidth || 200}
+                              onChange={(e) => {
+                                const raw = parseInt(e.target.value || '0', 10);
+                                const clamped = Math.max(50, Math.min(600, Number.isFinite(raw) ? raw : 200));
+                                handleUpdateTemplateField('companyInfo.logoWidth', clamped);
+                              }}
+                              className="w-16 bg-slate-50 border border-slate-200 rounded px-1 py-0.5 text-[10px] font-bold text-slate-700 text-center"
+                            />
+                          </div>
                         </div>
                         <button onClick={() => handleUpdateTemplateField('companyInfo.logoUrl', undefined)} className="p-2 text-red-400 hover:text-red-600"><Trash2 size={16} /></button>
                       </div>
@@ -961,68 +978,48 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
             {/* Visual Editor "Paper" */}
             <div className="bg-white shadow-2xl rounded-sm border border-slate-300 overflow-hidden flex flex-col min-h-[1200px] w-full max-w-[800px] mx-auto">
               
-              {/* HEADER MOCKUP */}
-              <div className="relative bg-white overflow-hidden h-[130px] border-b-2 border-black">
-                {/* Dark Blue Accent Strip */}
-                <div className="absolute top-0 right-0 w-[72%] h-full bg-[#031b33] origin-top-right -skew-x-[30deg] translate-x-[10%] z-0"></div>
-                {/* Main Blue Background */}
-                <div className="absolute top-0 right-0 w-[68%] h-full bg-[#004a8d] origin-top-right -skew-x-[30deg] translate-x-[15%] z-0"></div>
-                
-                <div className="relative z-10 flex w-full h-full items-center px-8">
-                  <div className="w-[45%] flex items-center gap-4 relative">
-                    {/* Logo Area - Clickable */}
-                    <div 
+              {/* HEADER MOCKUP (matches PDF preview layout) */}
+              <div className="relative bg-white overflow-hidden min-h-[152px] border-b-2 border-black">
+                <div className="absolute top-0 left-0 h-full w-[41%] bg-white z-0 pointer-events-none" aria-hidden />
+                <div className="absolute top-0 bottom-0 z-[1] pointer-events-none bg-[#031b33] w-[2%] left-[41%]" aria-hidden />
+                <div className="absolute top-0 right-0 bottom-0 left-[43%] bg-[#004a8d] z-0 pointer-events-none" aria-hidden />
+
+                <div className="relative z-10 flex w-full min-h-[152px] items-stretch py-2">
+                  <div className="flex-[0_0_41%] w-[41%] max-w-[41%] box-border flex items-center justify-center px-3 py-1 text-center">
+                    <div
                       onClick={() => logoInputRef.current?.click()}
-                      className="cursor-pointer group relative shrink-0"
+                      className="group flex w-full min-h-[7rem] cursor-pointer items-center justify-center"
                       title="Click to upload logo"
                     >
                       {pdfTemplate.companyInfo.logoUrl ? (
-                        <div 
-                          style={{ 
-                            transform: `translate(${pdfTemplate.companyInfo.logoXOffset || 0}px, ${pdfTemplate.companyInfo.logoYOffset || 0}px)` 
-                          }}
-                          className="transition-transform duration-200"
-                        >
-                          <img 
-                            src={pdfTemplate.companyInfo.logoUrl} 
-                            alt="Logo" 
-                            style={{ width: `${pdfTemplate.companyInfo.logoWidth || 200}px` }}
-                            className="max-w-full object-contain"
+                        <div className="flex h-[100px] w-[180px] items-center justify-center overflow-hidden transition-transform duration-200">
+                          <img
+                            src={pdfTemplate.companyInfo.logoUrl}
+                            alt="Logo"
+                            style={{
+                              width: '120px',
+                              height: 'auto',
+                              transform: `scale(${Math.max(0.25, (pdfTemplate.companyInfo.logoWidth ?? 120) / 120)})`,
+                              transformOrigin: 'center center',
+                            }}
+                            className="object-contain"
                           />
                         </div>
                       ) : (
-                        <div className="w-16 h-16 bg-[#004a8d] rounded-full flex items-center justify-center p-3 shadow-lg group-hover:bg-[#003366] transition-colors">
-                          <svg className="w-full h-full text-white" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                        <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-[#004a8d] p-2 shadow-lg transition-colors group-hover:bg-[#003366]">
+                          <svg className="h-9 w-9 text-white" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                          </svg>
                         </div>
                       )}
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 rounded-xl transition-colors flex items-center justify-center">
-                        <svg className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                      </div>
-                    </div>
-
-                    {/* Company Name - Always Visible & Editable */}
-                    <div className="flex-1 min-w-0">
-                      <textarea 
-                        value={pdfTemplate.companyInfo.name} 
-                        onChange={(e) => handleUpdateTemplateField('companyInfo.name', e.target.value)}
-                        style={{
-                          fontSize: `${pdfTemplate.companyInfo.companyNameStyle?.fontSize || 16}pt`,
-                          color: pdfTemplate.companyInfo.companyNameStyle?.color || '#004a8d',
-                          fontWeight: pdfTemplate.companyInfo.companyNameStyle?.fontWeight || '900',
-                          fontFamily: pdfTemplate.companyInfo.companyNameStyle?.fontFamily || 'Inter',
-                          fontStyle: pdfTemplate.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
-                        }}
-                        className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-indigo-500 outline-none uppercase leading-none tracking-tighter resize-none overflow-hidden whitespace-pre-wrap"
-                        rows={2}
-                      />
                     </div>
                   </div>
 
-                  <div className="flex-1 text-center text-white space-y-1 pl-8">
+                  <div className="flex-1 min-w-0 flex flex-col justify-center items-stretch text-center text-white px-5 space-y-0.5 self-center">
                     <textarea 
                       value={pdfTemplate.companyInfo.address} 
                       onChange={(e) => handleUpdateTemplateField('companyInfo.address', e.target.value)}
-                      className="w-full bg-transparent border-none outline-none text-[8pt] font-black uppercase text-center resize-none h-12 leading-tight overflow-hidden"
+                      className="w-full bg-transparent border-none outline-none text-[8pt] font-black uppercase text-center resize-none min-h-[3.25rem] leading-[1.25] whitespace-pre-line overflow-hidden"
                     />
                     <div className="flex justify-center items-center gap-1 text-[8pt] font-black uppercase">
                       <span>T:</span>

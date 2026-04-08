@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, Inbox, PanelLeftClose, PanelLeft, User } from 'lucide-react';
-import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile, SessionUserProfile } from '../types';
+import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, PanelLeftClose, PanelLeft } from 'lucide-react';
+import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile } from '../types';
 import { PRODUCTS, COMPANY_DETAILS, DEFAULT_PDF_TEMPLATE, INITIAL_CUSTOMER } from '../constants';
 import { processConversation } from '../services/geminiService';
 import { db, saveCatalog, savePipeline, saveAdminLogs, saveSettings, getSettings, saveCurrentAppState, getCurrentAppState } from '../services/db';
@@ -14,24 +14,19 @@ import AdminPanel from './AdminPanel';
 import ExcelImporter from './ExcelImporter';
 import AIChat from './AIChat';
 import { sendQuotationEmail } from '../services/emailService';
-import { blobToBase64 } from '../services/pdfService';
+import { blobToBase64, generateQuotationPDF } from '../services/pdfService';
 import { addCustomer } from '../services/customerApi';
+import { triggerPipelineUploadHook, uploadQuotationFile } from '../services/quotationFileApi';
 import { fetchProducts } from '../services/productsApi';
 import { deriveTierPricesFromBasePrice } from '../services/pricing';
 import * as XLSX from 'xlsx';
 import { fetchAllyOpportunities } from '../services/allyOpportunitiesApi';
 import { fetchEstimationFiles, type EstimationFileRecord } from '../services/estimationApi';
-import ProfileScreen from './ProfileScreen';
 
 interface DashboardProps {
   onLogout: () => void;
   userRole: UserRole;
-  sessionProfile: SessionUserProfile | null;
-  onRefreshSessionProfile: () => Promise<void>;
-  isRefreshingProfile: boolean;
 }
-
-type DashboardTab = 'estimation' | 'quotation' | 'draft' | 'pipeline' | 'profile' | 'admin';
 
 export interface Message {
   role: 'user' | 'model';
@@ -39,13 +34,7 @@ export interface Message {
   attachments?: { type: string; data: string; name?: string }[];
 }
 
-const Dashboard: React.FC<DashboardProps> = ({
-  onLogout,
-  userRole,
-  sessionProfile,
-  onRefreshSessionProfile,
-  isRefreshingProfile,
-}) => {
+const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   const [items, setItems] = useState<SelectedItem[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [laborServices, setLaborServices] = useState<LaborService[]>([]);
@@ -53,13 +42,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PaymentMethod.BANK_TRANSFER);
   const [discountValue, setDiscountValue] = useState<number>(0);
   const [discountType, setDiscountType] = useState<'percentage' | 'fixed'>('percentage');
+  const [manualDiscountEnabled, setManualDiscountEnabled] = useState<boolean>(true);
   const [showVat, setShowVat] = useState<boolean>(true);
   const [currentStatus, setCurrentStatus] = useState<QuotationStatus>(QuotationStatus.INQUIRY);
-  const [activeTab, setActiveTab] = useState<DashboardTab>('estimation');
-  const [roleWarningModal, setRoleWarningModal] = useState<{ open: boolean; message: string }>({
-    open: false,
-    message: '',
-  });
+  const [activeTab, setActiveTab] = useState<'estimation' | 'quotation' | 'pipeline' | 'admin'>('estimation');
   
   const [messages, setMessages] = useState<Message[]>([
     { role: 'model', content: "Hello! I'm your AA2000 Sales Assistant. I can help you build quotations faster. Just tell me what products you need, or upload a photo of a hand-written BOM or an Excel file!" }
@@ -81,7 +67,6 @@ const Dashboard: React.FC<DashboardProps> = ({
   
   const [pipelineSearch, setPipelineSearch] = useState('');
   const [pipelineStatusFilter, setPipelineStatusFilter] = useState<QuotationStatus | 'ALL'>('ALL');
-  const [draftSearch, setDraftSearch] = useState('');
   const [estimationFiles, setEstimationFiles] = useState<EstimationFileRecord[]>([]);
   const [isLoadingEstimations, setIsLoadingEstimations] = useState(false);
   const [estimationError, setEstimationError] = useState<string | null>(null);
@@ -91,38 +76,8 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const chatSensorRef = useRef<HTMLDivElement>(null);
   const processedAllyOpportunityIdsRef = useRef<Set<string>>(new Set());
-
-  const canAccessTab = useCallback(
-    (tab: DashboardTab): boolean => {
-      if (tab === 'admin') return userRole === 'ADMIN';
-      return true;
-    },
-    [userRole]
-  );
-
-  const requestTabChange = useCallback(
-    (tab: DashboardTab) => {
-      if (canAccessTab(tab)) {
-        setActiveTab(tab);
-        return;
-      }
-      setRoleWarningModal({
-        open: true,
-        message: 'Access denied: your account role does not have permission to open this screen.',
-      });
-    },
-    [canAccessTab]
-  );
-
-  useEffect(() => {
-    if (!canAccessTab(activeTab)) {
-      setActiveTab('quotation');
-      setRoleWarningModal({
-        open: true,
-        message: 'Your role changed and this screen is restricted. You were redirected to Quotation Studio.',
-      });
-    }
-  }, [activeTab, canAccessTab]);
+  const latestDesignedPdfRef = useRef<{ blob: Blob; fileName: string; at: number } | null>(null);
+  const submitPipelinePrintRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -173,6 +128,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           setPaymentMethod(savedAppState.paymentMethod);
           setDiscountValue(savedAppState.discountValue || savedAppState.discountPercent || 0);
           setDiscountType(savedAppState.discountType || 'percentage');
+          setManualDiscountEnabled(savedAppState.manualDiscountEnabled ?? true);
           setShowVat(savedAppState.showVat);
           setCurrentStatus(savedAppState.currentStatus);
           setPdfFileName(savedAppState.pdfFileName || '');
@@ -223,6 +179,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         customer,
         paymentMethod,
         discountValue,
+        manualDiscountEnabled,
         discountType,
         discountPercent: discountType === 'percentage' ? discountValue : 0, // for backward compatibility
         showVat,
@@ -232,7 +189,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       });
     }, 1000);
     return () => clearTimeout(timer);
-  }, [items, customer, paymentMethod, discountValue, discountType, showVat, currentStatus]);
+  }, [items, customer, paymentMethod, discountValue, manualDiscountEnabled, discountType, showVat, currentStatus]);
 
   const persistQuotes = async (quotes: QuotationRecord[]) => {
     setSavedQuotes(quotes);
@@ -325,9 +282,9 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const handleCreateQuotationFromEstimation = useCallback((file: EstimationFileRecord) => {
     setSelectedEstimationFile(file);
-    requestTabChange('quotation');
+    setActiveTab('quotation');
     showToast(`Loaded ${file.filename}. You can draft while viewing the source file.`, 'info');
-  }, [requestTabChange]);
+  }, []);
 
   const getPriceForClient = useCallback((product: Product, clientType: ClientType, volume: number): number => {
     const tier = deriveTierPricesFromBasePrice(product.baseCost || 0);
@@ -618,6 +575,17 @@ const Dashboard: React.FC<DashboardProps> = ({
     if (currentStatus === QuotationStatus.INQUIRY) setCurrentStatus(QuotationStatus.REQUIREMENTS);
   }, [customer.clientType, getPriceForClient, currentStatus]);
 
+  const handleCreateQuickProduct = useCallback(async (product: Product) => {
+    const exists = dynamicProducts.some(
+      (p) => p.model.toLowerCase() === product.model.toLowerCase() || p.id === product.id
+    );
+    if (exists) {
+      throw new Error(`Product with model "${product.model}" already exists.`);
+    }
+    await persistCatalog([...dynamicProducts, product]);
+    showToast(`Added new product: ${product.model}`, 'success');
+  }, [dynamicProducts]);
+
   const removeUploadedFile = useCallback((fileId: string) => {
     setUploadedFiles(prev => prev.filter(f => f.id !== fileId));
     setItems(prev => prev.filter(item => item.sourceFileId !== fileId));
@@ -762,7 +730,8 @@ const Dashboard: React.FC<DashboardProps> = ({
 
     const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
     const laborCost = customer.hasLabor ? (customer.laborCost || 0) : 0;
-    const discountAmount = discountType === 'percentage' ? (subtotal * (discountValue / 100)) : discountValue;
+    const effectiveDiscountValue = manualDiscountEnabled ? discountValue : 0;
+    const discountAmount = discountType === 'percentage' ? (subtotal * (effectiveDiscountValue / 100)) : effectiveDiscountValue;
     const netTotal = subtotal - discountAmount + laborCost;
     const vat = netTotal * 0.12;
     const finalTotal = showVat ? netTotal + vat : netTotal;
@@ -773,9 +742,9 @@ const Dashboard: React.FC<DashboardProps> = ({
       laborServices: [...laborServices],
       customer: { ...customer },
       paymentMethod,
-      discountPercent: discountType === 'percentage' ? discountValue : 0,
+      discountPercent: discountType === 'percentage' ? effectiveDiscountValue : 0,
       discountType,
-      discountValue,
+      discountValue: effectiveDiscountValue,
       showVat,
       status: currentStatus === QuotationStatus.INQUIRY ? QuotationStatus.PREPARATION : currentStatus,
       total: finalTotal, createdAt: new Date().toISOString(),
@@ -784,56 +753,65 @@ const Dashboard: React.FC<DashboardProps> = ({
       isDraft: false,
     };
     await persistQuotes([newQuote, ...savedQuotes]);
-    showToast('Quote submitted. Customer saved to backend; quotation saved to pipeline.');
-    setItems([]); setUploadedFiles([]); setCustomer(INITIAL_CUSTOMER);
-    setDiscountValue(0); setDiscountType('percentage'); setCurrentStatus(QuotationStatus.INQUIRY); requestTabChange('pipeline');
-  };
-
-  const handleSaveDraft = async () => {
-    if (!isFormValid || items.length === 0) return;
-
-    const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
-    const laborCost = customer.hasLabor ? (customer.laborCost || 0) : 0;
-    const discountAmount = discountType === 'percentage' ? (subtotal * (discountValue / 100)) : discountValue;
-    const netTotal = subtotal - discountAmount + laborCost;
-    const vat = netTotal * 0.12;
-    const finalTotal = showVat ? netTotal + vat : netTotal;
-
-    let baseId = previewId.trim() || `PQ-${Date.now().toString().slice(-6)}`;
-    if (savedQuotes.some((q) => q.id === baseId)) {
-      baseId = `PQ-${Date.now().toString().slice(-6)}`;
+    let designedPdfBlob: Blob | undefined;
+    try {
+      if (submitPipelinePrintRef.current) {
+        designedPdfBlob = await generateQuotationPDF(submitPipelinePrintRef.current, `${newQuote.id}.pdf`);
+        latestDesignedPdfRef.current = { blob: designedPdfBlob, fileName: `${newQuote.id}.pdf`, at: Date.now() };
+      }
+    } catch (e: any) {
+      showToast(`Designed PDF generation failed, using fallback upload: ${e?.message || 'PDF error'}`, 'info');
     }
 
-    const newQuote: QuotationRecord = {
-      id: baseId,
-      items: [...items],
-      laborServices: [...laborServices],
-      customer: { ...customer },
-      paymentMethod,
-      discountPercent: discountType === 'percentage' ? discountValue : 0,
-      discountType,
-      discountValue,
-      showVat,
-      status: QuotationStatus.REVIEW,
-      total: finalTotal,
-      createdAt: new Date().toISOString(),
-      logs: [{ date: new Date().toISOString(), note: 'Saved to Draft Inbox.', user: 'Staff' }],
-      attachments: [],
-      version: 1,
-      isDraft: true,
-    };
-    await persistQuotes([newQuote, ...savedQuotes]);
-    showToast('Saved to Draft Inbox. Review, email, or move to pipeline when ready.');
+    const cachedDesignedPdf = designedPdfBlob
+      ? { blob: designedPdfBlob, fileName: `${newQuote.id}.pdf`, at: Date.now() }
+      : latestDesignedPdfRef.current;
+    const useDesignedPdf = !!cachedDesignedPdf;
+    try {
+      await triggerPipelineUploadHook({
+        quoteId: newQuote.id,
+        customerName: newQuote.customer.fullName || newQuote.customer.companyName,
+        total: newQuote.total,
+        createdAt: newQuote.createdAt,
+        pdfBlob: useDesignedPdf ? cachedDesignedPdf.blob : undefined,
+        fileName: useDesignedPdf ? `${newQuote.id}.pdf` : undefined,
+      });
+      if (!useDesignedPdf) showToast('Pipeline uploaded using fallback PDF.', 'info');
+    } catch (e: any) {
+      showToast(`Pipeline upload trigger failed: ${e?.message || 'Server error'}`, 'error');
+    }
+    showToast('Quote submitted. Customer saved to backend; quotation saved to pipeline.');
+    const resetReference = `PQ-FDAS-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
     setItems([]);
     setUploadedFiles([]);
     setLaborServices([]);
     setCustomer(INITIAL_CUSTOMER);
+    setPaymentMethod(PaymentMethod.BANK_TRANSFER);
     setDiscountValue(0);
     setDiscountType('percentage');
+    setManualDiscountEnabled(true);
+    setShowVat(true);
     setCurrentStatus(QuotationStatus.INQUIRY);
-    setPreviewId(`PQ-FDAS-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`);
     setPdfFileName('');
-    requestTabChange('draft');
+    setPreviewId(resetReference);
+    setSelectedQuoteId(null);
+    setActiveTab('pipeline');
+    await saveCurrentAppState({
+      id: 'current',
+      items: [],
+      uploadedFiles: [],
+      laborServices: [],
+      customer: INITIAL_CUSTOMER,
+      paymentMethod: PaymentMethod.BANK_TRANSFER,
+      discountPercent: 0,
+      discountType: 'percentage',
+      discountValue: 0,
+      manualDiscountEnabled: true,
+      showVat: true,
+      currentStatus: QuotationStatus.INQUIRY,
+      pdfFileName: '',
+      referenceCode: resetReference,
+    });
   };
 
   const handlePromoteFromDraft = (id: string) => {
@@ -938,7 +916,8 @@ const Dashboard: React.FC<DashboardProps> = ({
       } else {
         const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
         const laborCost = customer.hasLabor ? (customer.laborCost || 0) : 0;
-        const discountAmount = discountType === 'percentage' ? (subtotal * (discountValue / 100)) : discountValue;
+        const effectiveDiscountValue = manualDiscountEnabled ? discountValue : 0;
+        const discountAmount = discountType === 'percentage' ? (subtotal * (effectiveDiscountValue / 100)) : effectiveDiscountValue;
         const netTotal = subtotal - discountAmount + laborCost;
         const vat = netTotal * 0.12;
         const finalTotal = showVat ? netTotal + vat : netTotal;
@@ -948,9 +927,9 @@ const Dashboard: React.FC<DashboardProps> = ({
           laborServices: [...laborServices],
           customer: { ...customer }, 
           paymentMethod, 
-          discountPercent: discountType === 'percentage' ? discountValue : 0,
+          discountPercent: discountType === 'percentage' ? effectiveDiscountValue : 0,
           discountType,
-          discountValue,
+          discountValue: effectiveDiscountValue,
           showVat,
           status: QuotationStatus.FOLLOWUP, total: finalTotal, createdAt: new Date().toISOString(),
           logs: [{ date: new Date().toISOString(), note: 'Created via Email flow.', user: 'System' }],
@@ -967,15 +946,27 @@ const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
+  const handlePersistPdf = useCallback(async (pdfBlob: Blob, fileName: string) => {
+    try {
+      latestDesignedPdfRef.current = { blob: pdfBlob, fileName, at: Date.now() };
+      await uploadQuotationFile(pdfBlob, fileName);
+      showToast('Quotation PDF uploaded to server storage.', 'success');
+    } catch (e: any) {
+      showToast(`PDF upload failed: ${e?.message || 'Server upload error'}`, 'error');
+      throw e;
+    }
+  }, []);
+
   const subtotal = useMemo(() => items.reduce((sum, i) => sum + i.price * i.quantity, 0), [items]);
   const laborCost = useMemo(() => customer.hasLabor ? (customer.laborCost || 0) : 0, [customer.hasLabor, customer.laborCost]);
   
   const discountAmount = useMemo(() => {
+    if (!manualDiscountEnabled) return 0;
     if (discountType === 'percentage') {
       return subtotal * (discountValue / 100);
     }
     return discountValue;
-  }, [subtotal, discountValue, discountType]);
+  }, [subtotal, discountValue, discountType, manualDiscountEnabled]);
 
   const netTotal = useMemo(() => subtotal - discountAmount + laborCost, [subtotal, discountAmount, laborCost]);
   
@@ -985,8 +976,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   // The grand total is the Net amount plus VAT (if enabled)
   const grandTotal = useMemo(() => showVat ? netTotal + vatAmount : netTotal, [showVat, netTotal, vatAmount]);
 
-  const pipelineQuotes = useMemo(() => savedQuotes.filter((q) => !q.isDraft), [savedQuotes]);
-  const draftQuotes = useMemo(() => savedQuotes.filter((q) => q.isDraft), [savedQuotes]);
+  const pipelineQuotes = useMemo(() => savedQuotes, [savedQuotes]);
 
   const recentQuotationHistory = useMemo(() => {
     const entries: { quoteId: string; note: string; date: string; user: string }[] = [];
@@ -1044,7 +1034,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Workspaces</p>
               <nav className="space-y-1">
                 <button
-                  onClick={() => requestTabChange('estimation')}
+                  onClick={() => setActiveTab('estimation')}
                   className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'estimation' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                 >
                   <div className={`p-2 rounded-lg transition-colors ${activeTab === 'estimation' ? 'bg-amber-500/10 text-amber-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
@@ -1057,7 +1047,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 </button>
 
                 <button
-                  onClick={() => requestTabChange('quotation')}
+                  onClick={() => setActiveTab('quotation')}
                   className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'quotation' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                 >
                   <div className={`p-2 rounded-lg transition-colors ${activeTab === 'quotation' ? 'bg-cyan-500/10 text-cyan-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
@@ -1070,20 +1060,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 </button>
 
                 <button
-                  onClick={() => requestTabChange('draft')}
-                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'draft' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
-                >
-                  <div className={`p-2 rounded-lg transition-colors ${activeTab === 'draft' ? 'bg-amber-500/10 text-amber-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
-                    <Inbox size={18} />
-                  </div>
-                  <div className="text-left">
-                    <span className="block font-bold">Draft Inbox</span>
-                    <span className="block text-[10px] opacity-60 font-normal mt-0.5">REVIEW BEFORE SEND</span>
-                  </div>
-                </button>
-
-                <button
-                  onClick={() => requestTabChange('pipeline')}
+                  onClick={() => setActiveTab('pipeline')}
                   className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'pipeline' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                 >
                   <div className={`p-2 rounded-lg transition-colors ${activeTab === 'pipeline' ? 'bg-purple-500/10 text-purple-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
@@ -1095,22 +1072,9 @@ const Dashboard: React.FC<DashboardProps> = ({
                   </div>
                 </button>
 
-                <button
-                  onClick={() => requestTabChange('profile')}
-                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'profile' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
-                >
-                  <div className={`p-2 rounded-lg transition-colors ${activeTab === 'profile' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
-                    <User size={18} />
-                  </div>
-                  <div className="text-left">
-                    <span className="block font-bold">Profile</span>
-                    <span className="block text-[10px] opacity-60 font-normal mt-0.5">SESSION &amp; ACCOUNT</span>
-                  </div>
-                </button>
-
                 {userRole === 'ADMIN' && (
                   <button
-                    onClick={() => requestTabChange('admin')}
+                    onClick={() => setActiveTab('admin')}
                     className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'admin' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                   >
                     <div className={`p-2 rounded-lg transition-colors ${activeTab === 'admin' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
@@ -1129,44 +1093,21 @@ const Dashboard: React.FC<DashboardProps> = ({
 
         <div className="mt-auto p-6 border-t border-slate-800/50">
           <div className="flex items-center justify-between group">
-            <button
-              type="button"
-              onClick={() => requestTabChange('profile')}
-              className="flex items-center gap-3 text-left min-w-0 rounded-xl p-1 -m-1 hover:bg-slate-800/50 transition-colors flex-1 mr-2"
-              title="View profile"
-            >
-              <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800 shrink-0 overflow-hidden">
-                {sessionProfile?.employee?.Emp_imageBase64 ? (
-                  <img
-                    src={
-                      sessionProfile.employee.Emp_imageBase64.startsWith('data:')
-                        ? sessionProfile.employee.Emp_imageBase64
-                        : `data:image/jpeg;base64,${sessionProfile.employee.Emp_imageBase64}`
-                    }
-                    alt=""
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  sessionProfile?.initials ?? (userRole === 'ADMIN' ? 'SA' : 'SE')
-                )}
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800">
+                {userRole === 'ADMIN' ? 'SA' : 'SE'}
               </div>
-              <div className="min-w-0">
-                <p className="text-xs font-bold text-white truncate">
-                  {sessionProfile?.displayName ??
-                    (userRole === 'ADMIN' ? 'System Admin' : 'Sales Employee')}
+              <div>
+                <p className="text-xs font-bold text-white">
+                  {userRole === 'ADMIN' ? 'System Admin' : 'Sales Employee'}
                 </p>
                 <p className="text-[9px] text-emerald-400 font-bold tracking-wider uppercase flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
                   Signed In
                 </p>
               </div>
-            </button>
-            <button
-              onClick={onLogout}
-              title="Back to One App"
-              aria-label="Back to One App"
-              className="p-2 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-all"
-            >
+            </div>
+            <button onClick={onLogout} className="p-2 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-all">
               <LogOut size={18} />
             </button>
           </div>
@@ -1191,19 +1132,27 @@ const Dashboard: React.FC<DashboardProps> = ({
         {activeTab === 'estimation' && (
           <div className="p-8 max-w-7xl mx-auto min-h-full">
             <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm min-h-[80vh]">
-              <div className="flex flex-col md:flex-row items-center justify-between gap-4 mb-8">
+              <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
                 <div>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Workspace</p>
                   <h2 className="text-2xl font-black text-slate-900">Estimation Inbox</h2>
+                  <p className="mt-2 text-sm text-slate-500 max-w-2xl">
+                    Review incoming estimation files, download originals, and start drafting a quotation in one click.
+                  </p>
                 </div>
-                <button
-                  onClick={loadEstimationInbox}
-                  disabled={isLoadingEstimations}
-                  className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-wider text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  <RefreshCw size={14} className={isLoadingEstimations ? 'animate-spin' : ''} />
-                  Refresh Files
-                </button>
+                <div className="flex items-center gap-3">
+                  <div className="px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                    {estimationFiles.length} {estimationFiles.length === 1 ? 'File' : 'Files'}
+                  </div>
+                  <button
+                    onClick={loadEstimationInbox}
+                    disabled={isLoadingEstimations}
+                    className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-wider text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    <RefreshCw size={14} className={isLoadingEstimations ? 'animate-spin' : ''} />
+                    Refresh
+                  </button>
+                </div>
               </div>
 
               {estimationError && (
@@ -1212,19 +1161,25 @@ const Dashboard: React.FC<DashboardProps> = ({
                 </div>
               )}
 
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto rounded-2xl border border-slate-200">
                 <table className="w-full text-left border-collapse">
-                  <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-500 border-y border-slate-100">
+                  <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-500 border-b border-slate-200">
                     <tr>
-                      <th className="px-6 py-4 first:rounded-l-xl">File Name</th>
+                      <th className="px-6 py-4">File Name</th>
                       <th className="px-6 py-4">Type</th>
                       <th className="px-6 py-4">Saved</th>
                       <th className="px-6 py-4">Download</th>
-                      <th className="px-6 py-4 last:rounded-r-xl">Action</th>
+                      <th className="px-6 py-4">Action</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {!isLoadingEstimations && estimationFiles.length === 0 ? (
+                  <tbody className="divide-y divide-slate-100">
+                    {isLoadingEstimations && estimationFiles.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="text-center py-16 text-slate-400 text-sm font-medium">
+                          Loading estimation files...
+                        </td>
+                      </tr>
+                    ) : estimationFiles.length === 0 ? (
                       <tr>
                         <td colSpan={5} className="text-center py-16 text-slate-400 text-sm font-medium">
                           No estimation files found.
@@ -1234,19 +1189,21 @@ const Dashboard: React.FC<DashboardProps> = ({
                       estimationFiles.map((f) => (
                         <tr key={f.filename} className="hover:bg-slate-50 transition-colors">
                           <td className="px-6 py-5">
-                            <div className="font-bold text-slate-900 text-sm">{f.filename}</div>
+                            <div className="font-bold text-slate-900 text-sm break-all">{f.filename}</div>
                           </td>
-                          <td className="px-6 py-5 text-sm font-medium text-slate-600">
-                            {f.isPdf ? 'PDF' : f.isDocx ? 'DOCX' : (f.extension ? f.extension.toUpperCase() : 'FILE')}
+                          <td className="px-6 py-5">
+                            <span className="inline-flex px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-slate-100 text-slate-700">
+                              {f.isPdf ? 'PDF' : f.isDocx ? 'DOCX' : (f.extension ? f.extension.toUpperCase() : 'FILE')}
+                            </span>
                           </td>
-                          <td className="px-6 py-5 text-xs text-slate-500">
+                          <td className="px-6 py-5 text-xs text-slate-500 whitespace-nowrap">
                             {f.createdAt ? new Date(f.createdAt).toLocaleString() : '-'}
                           </td>
                           <td className="px-6 py-5">
                             <button
                               type="button"
                               onClick={() => handleDownloadEstimationFile(f)}
-                              className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-[10px] font-bold uppercase tracking-wider hover:bg-indigo-500"
+                              className="px-3 py-2 rounded-lg bg-slate-900 text-white text-[10px] font-bold uppercase tracking-wider hover:bg-slate-800"
                             >
                               Download
                             </button>
@@ -1310,7 +1267,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               {recentQuotationHistory.length > 0 && (
                 <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm p-6">
                   <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Quotation history</h3>
-                  <p className="text-xs text-slate-500 mb-4">Latest activity across drafts and pipeline (newest first).</p>
+                  <p className="text-xs text-slate-500 mb-4">Latest quotation activity (newest first).</p>
                   <ul className="divide-y divide-slate-100 max-h-56 overflow-y-auto custom-scrollbar">
                     {recentQuotationHistory.map((e, i) => (
                       <li key={`${e.quoteId}-${e.date}-${i}`} className="py-3 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1 text-xs">
@@ -1382,7 +1339,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                       </div>
                     </div>
 
-                    <ProductList products={dynamicProducts} onAdd={addItem} />
+                    <ProductList products={dynamicProducts} onAdd={addItem} onCreateProduct={handleCreateQuickProduct} />
 
                     <QuotationSummary
                       items={items}
@@ -1395,6 +1352,8 @@ const Dashboard: React.FC<DashboardProps> = ({
                       vat={vatAmount}
                       discountValue={discountValue}
                       discountType={discountType}
+                      manualDiscountEnabled={manualDiscountEnabled}
+                      onManualDiscountEnabledChange={setManualDiscountEnabled}
                       onDiscountValueChange={setDiscountValue}
                       onDiscountTypeChange={setDiscountType}
                       showVat={showVat}
@@ -1407,7 +1366,6 @@ const Dashboard: React.FC<DashboardProps> = ({
                       onReferenceCodeChange={setPreviewId}
                       onPreview={() => { setIsPreviewOpen(true); }}
                       onSubmit={handleSubmitPipeline}
-                      onSaveDraft={handleSaveDraft}
                       onSendEmail={async () => { setIsPreviewOpen(true); }}
                       clientType={customer.clientType}
                     />
@@ -1457,7 +1415,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
                 <div className="flex flex-col gap-8">
                    <div className="w-full space-y-8">
-                      <ProductList products={dynamicProducts} onAdd={addItem} />
+                      <ProductList products={dynamicProducts} onAdd={addItem} onCreateProduct={handleCreateQuickProduct} />
                    </div>
                    <div className="w-full">
                       <QuotationSummary 
@@ -1471,6 +1429,8 @@ const Dashboard: React.FC<DashboardProps> = ({
                         vat={vatAmount} 
                         discountValue={discountValue}
                         discountType={discountType}
+                        manualDiscountEnabled={manualDiscountEnabled}
+                        onManualDiscountEnabledChange={setManualDiscountEnabled}
                         onDiscountValueChange={setDiscountValue}
                         onDiscountTypeChange={setDiscountType}
                         showVat={showVat}
@@ -1483,7 +1443,6 @@ const Dashboard: React.FC<DashboardProps> = ({
                         onReferenceCodeChange={setPreviewId}
                         onPreview={() => { setIsPreviewOpen(true); }} 
                         onSubmit={handleSubmitPipeline} 
-                        onSaveDraft={handleSaveDraft}
                         onSendEmail={async () => { setIsPreviewOpen(true); }} 
                         clientType={customer.clientType}
                       />
@@ -1492,91 +1451,6 @@ const Dashboard: React.FC<DashboardProps> = ({
               </div>
               </>
               )}
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'draft' && (
-          <div className="p-8 max-w-7xl mx-auto min-h-full">
-            <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm min-h-[80vh]">
-              <div className="flex flex-col md:flex-row items-center justify-between gap-4 mb-8">
-                <div>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Staging</p>
-                  <h2 className="text-2xl font-black text-slate-900">Draft Inbox</h2>
-                  <p className="text-sm text-slate-500 mt-2 max-w-xl">
-                    Quotations saved from Quotation Studio appear here. Open one to review the PDF, send email to the customer, or add it to the active pipeline.
-                  </p>
-                </div>
-                <div className="group flex items-center bg-white border border-slate-200 rounded-2xl px-4 py-3 w-full md:w-72 focus-within:ring-2 focus-within:ring-amber-500/20 focus-within:border-amber-500 transition-all shadow-sm">
-                  <Search className="text-slate-400 group-focus-within:text-amber-600 transition-colors mr-3 shrink-0" size={18} />
-                  <input
-                    type="text"
-                    placeholder="Search drafts..."
-                    value={draftSearch}
-                    onChange={(e) => setDraftSearch(e.target.value)}
-                    className="bg-transparent border-none outline-none text-sm font-medium w-full placeholder:text-slate-400 text-slate-700 h-full p-0"
-                  />
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-500 border-y border-slate-100">
-                    <tr>
-                      <th className="px-6 py-4 first:rounded-l-xl">Quote ID</th>
-                      <th className="px-6 py-4">Recipient</th>
-                      <th className="px-6 py-4">Project</th>
-                      <th className="px-6 py-4">Total Value</th>
-                      <th className="px-6 py-4">Saved</th>
-                      <th className="px-6 py-4 last:rounded-r-xl">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {draftQuotes.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="text-center py-16 text-slate-400 text-sm font-medium">
-                          No drafts yet. Use &quot;Save to Draft Inbox&quot; in Quotation Studio.
-                        </td>
-                      </tr>
-                    ) : (
-                      draftQuotes
-                        .filter(
-                          (q) =>
-                            q.id.toLowerCase().includes(draftSearch.toLowerCase()) ||
-                            q.customer.fullName.toLowerCase().includes(draftSearch.toLowerCase())
-                        )
-                        .map((q) => (
-                          <tr
-                            key={q.id}
-                            className="hover:bg-amber-50/40 cursor-pointer transition-colors group"
-                            onClick={() => setSelectedQuoteId(q.id)}
-                          >
-                            <td className="px-6 py-5">
-                              <span className="font-bold text-amber-800 bg-amber-50 px-3 py-1.5 rounded-lg text-xs">{q.id}</span>
-                            </td>
-                            <td className="px-6 py-5">
-                              <div className="font-bold text-slate-900 text-sm">{q.customer.fullName}</div>
-                              <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mt-0.5">{q.customer.companyName}</div>
-                            </td>
-                            <td className="px-6 py-5 text-sm font-medium text-slate-600">{q.customer.projectFor}</td>
-                            <td className="px-6 py-5 font-bold text-slate-900 text-sm">₱{q.total.toLocaleString()}</td>
-                            <td className="px-6 py-5 text-xs text-slate-500">{new Date(q.createdAt).toLocaleString()}</td>
-                            <td className="px-6 py-5">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  persistQuotes(savedQuotes.filter((x) => x.id !== q.id));
-                                }}
-                                className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                              >
-                                <Trash2 size={18} />
-                              </button>
-                            </td>
-                          </tr>
-                        ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
             </div>
           </div>
         )}
@@ -1666,30 +1540,6 @@ const Dashboard: React.FC<DashboardProps> = ({
           </div>
         )}
 
-        {activeTab === 'profile' && (
-          <>
-            {sessionProfile ? (
-              <ProfileScreen
-                profile={sessionProfile}
-                isRefreshing={isRefreshingProfile}
-                onRefresh={() => void onRefreshSessionProfile()}
-              />
-            ) : (
-              <div className="p-8 max-w-3xl mx-auto min-h-full flex flex-col items-center justify-center gap-4">
-                <p className="text-sm text-slate-600 font-medium">Loading your profile…</p>
-                <button
-                  type="button"
-                  onClick={() => void onRefreshSessionProfile()}
-                  className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-indigo-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-indigo-500"
-                >
-                  <RefreshCw size={14} className={isRefreshingProfile ? 'animate-spin' : ''} />
-                  Retry
-                </button>
-              </div>
-            )}
-          </>
-        )}
-
         {activeTab === 'admin' && (
           <div className="p-8 max-w-7xl mx-auto">
              <AdminPanel 
@@ -1756,13 +1606,38 @@ const Dashboard: React.FC<DashboardProps> = ({
         laborCost={laborCost}
         vat={vatAmount} 
         discountAmount={discountAmount} 
+        discountValue={manualDiscountEnabled ? discountValue : 0}
+        discountType={discountType}
         total={grandTotal} 
         showVat={showVat}
         existingQuoteId={previewId} 
         onSendEmail={handleEmailAction} 
+        onPersistPdf={handlePersistPdf}
         template={pdfTemplate}
         customFileName={pdfFileName}
         onCustomFileNameChange={setPdfFileName}
+      />
+      <PreviewModal
+        headless
+        printRefOverride={submitPipelinePrintRef}
+        isOpen={false}
+        onClose={() => {}}
+        items={items}
+        customer={customer}
+        paymentMethod={paymentMethod}
+        subtotal={subtotal}
+        laborCost={laborCost}
+        vat={vatAmount}
+        discountAmount={discountAmount}
+        discountValue={manualDiscountEnabled ? discountValue : 0}
+        discountType={discountType}
+        total={grandTotal}
+        showVat={showVat}
+        existingQuoteId={previewId}
+        onSendEmail={async () => {}}
+        template={pdfTemplate}
+        customFileName={pdfFileName || `Quotation_${previewId}`}
+        onCustomFileNameChange={() => {}}
       />
       {selectedQuoteId && (
         <PipelineDetail
@@ -1776,10 +1651,11 @@ const Dashboard: React.FC<DashboardProps> = ({
             setCustomer(q.customer);
             setDiscountValue(q.discountValue || q.discountPercent || 0);
             setDiscountType(q.discountType || 'percentage');
+            setManualDiscountEnabled((q.discountValue || q.discountPercent || 0) > 0);
             setShowVat(q.showVat ?? true);
             setPaymentMethod(q.paymentMethod);
             setPreviewId(q.id);
-            requestTabChange('quotation');
+            setActiveTab('quotation');
             setSelectedQuoteId(null);
           }}
           onPreviewPDF={() => {
@@ -1789,6 +1665,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             setCustomer(q.customer);
             setDiscountValue(q.discountValue || q.discountPercent || 0);
             setDiscountType(q.discountType || 'percentage');
+            setManualDiscountEnabled((q.discountValue || q.discountPercent || 0) > 0);
             setShowVat(q.showVat ?? true);
             setPaymentMethod(q.paymentMethod);
             setPreviewId(q.id);
@@ -1797,36 +1674,6 @@ const Dashboard: React.FC<DashboardProps> = ({
           }}
           onPromoteFromDraft={handlePromoteFromDraft}
         />
-      )}
-      {roleWarningModal.open && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/70 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white border border-slate-200 shadow-2xl p-6">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest mb-1">Navigation blocked</p>
-                <h3 className="text-lg font-black text-slate-900">Role mismatch</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setRoleWarningModal({ open: false, message: '' })}
-                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100"
-                aria-label="Close role warning"
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <p className="mt-3 text-sm text-slate-600">{roleWarningModal.message}</p>
-            <div className="mt-6 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setRoleWarningModal({ open: false, message: '' })}
-                className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-indigo-500"
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );

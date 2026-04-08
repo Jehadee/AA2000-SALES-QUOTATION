@@ -71,7 +71,7 @@ function getFilePathTemplate(): string {
   const override = (import.meta as any).env?.VITE_ESTIMATION_FILE_PATH_TEMPLATE as string | undefined;
   if (override && override.trim()) return override.trim();
   // Use "{filename}" token for interpolation.
-  return '/service/quotation/list/estimationFiles{filename}';
+  return '/service/quotation/get/estimationFile/{filename}';
 }
 
 function buildAbsoluteUrl(pathOrUrl: string): string {
@@ -82,7 +82,13 @@ function buildAbsoluteUrl(pathOrUrl: string): string {
 }
 
 function buildFileUrl(filename: string): string {
-  const tpl = getFilePathTemplate();
+  let tpl = getFilePathTemplate();
+  // Backward compatibility: if an old list endpoint template is configured for file download,
+  // force it to use the proper get endpoint to avoid malformed URLs like
+  // /service/quotation/list/estimationFiles<filename>.
+  if (/\/list\/estimationFiles/i.test(tpl)) {
+    tpl = tpl.replace(/\/list\/estimationFiles(?:\{filename\})?/i, '/get/estimationFile/{filename}');
+  }
   const encoded = encodeURIComponent(filename);
   const path = tpl.includes('{filename}') ? tpl.replace('{filename}', encoded) : `${tpl.replace(/\/+$/, '')}/${encoded}`;
   return buildAbsoluteUrl(path);

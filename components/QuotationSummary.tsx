@@ -14,6 +14,8 @@ interface Props {
   vat: number;
   discountValue: number;
   discountType: 'percentage' | 'fixed';
+  manualDiscountEnabled: boolean;
+  onManualDiscountEnabledChange: (enabled: boolean) => void;
   onDiscountValueChange: (val: number) => void;
   onDiscountTypeChange: (type: 'percentage' | 'fixed') => void;
   showVat: boolean;
@@ -22,7 +24,6 @@ interface Props {
   isValid: boolean;
   onPreview: () => void;
   onSubmit: () => Promise<void>;
-  onSaveDraft: () => Promise<void>;
   onSendEmail: () => Promise<void>;
   clientType?: ClientType;
   pdfFileName: string;
@@ -42,6 +43,8 @@ const QuotationSummary: React.FC<Props> = React.memo(({
   vat, 
   discountValue,
   discountType,
+  manualDiscountEnabled,
+  onManualDiscountEnabledChange,
   onDiscountValueChange,
   onDiscountTypeChange,
   showVat,
@@ -50,7 +53,6 @@ const QuotationSummary: React.FC<Props> = React.memo(({
   isValid,
   onPreview,
   onSubmit,
-  onSaveDraft,
   onSendEmail,
   clientType = ClientType.END_USER,
   pdfFileName,
@@ -59,7 +61,6 @@ const QuotationSummary: React.FC<Props> = React.memo(({
   onReferenceCodeChange
 }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSavingDraft, setIsSavingDraft] = useState(false);
 
   const totalQty = useMemo(() => items.reduce((sum, i) => sum + i.quantity, 0), [items]);
 
@@ -84,16 +85,6 @@ const QuotationSummary: React.FC<Props> = React.memo(({
       await onSubmit();
     } finally {
       setIsSubmitting(false);
-    }
-  };
-
-  const handleSaveDraftClick = async () => {
-    if (!isValid || isSavingDraft) return;
-    setIsSavingDraft(true);
-    try {
-      await onSaveDraft();
-    } finally {
-      setIsSavingDraft(false);
     }
   };
 
@@ -231,16 +222,29 @@ const QuotationSummary: React.FC<Props> = React.memo(({
           
           <div className="flex flex-col gap-2 p-3 bg-orange-50/50 rounded-xl border border-orange-100">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] font-bold text-orange-700 uppercase tracking-widest">Manual Discount</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold text-orange-700 uppercase tracking-widest">Manual Discount</span>
+                <label className="inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={manualDiscountEnabled}
+                    onChange={(e) => onManualDiscountEnabledChange(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="relative w-9 h-5 bg-slate-200 rounded-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:h-4 after:w-4 after:bg-white after:border after:border-slate-300 after:rounded-full after:transition-all peer-checked:bg-orange-500 peer-checked:after:translate-x-full" />
+                </label>
+              </div>
               <div className="flex bg-white border border-orange-200 rounded-lg p-0.5">
                 <button 
                   onClick={() => onDiscountTypeChange('percentage')}
+                  disabled={!manualDiscountEnabled}
                   className={`px-2 py-1 text-[9px] font-bold rounded-md transition-all ${discountType === 'percentage' ? 'bg-orange-500 text-white shadow-sm' : 'text-orange-400 hover:text-orange-600'}`}
                 >
                   %
                 </button>
                 <button 
                   onClick={() => onDiscountTypeChange('fixed')}
+                  disabled={!manualDiscountEnabled}
                   className={`px-2 py-1 text-[9px] font-bold rounded-md transition-all ${discountType === 'fixed' ? 'bg-orange-500 text-white shadow-sm' : 'text-orange-400 hover:text-orange-600'}`}
                 >
                   ₱
@@ -257,7 +261,8 @@ const QuotationSummary: React.FC<Props> = React.memo(({
                     min="0"
                     max={discountType === 'percentage' ? 100 : subtotal}
                     step="0.01"
-                    value={discountValue === 0 ? '' : discountValue}
+                    value={manualDiscountEnabled ? (discountValue === 0 ? '' : discountValue) : ''}
+                    disabled={!manualDiscountEnabled}
                     onChange={(e) => {
                       const val = e.target.value;
                       if (val === '') {
@@ -277,7 +282,7 @@ const QuotationSummary: React.FC<Props> = React.memo(({
               </div>
               <div className="text-right min-w-[80px]">
                 <span className="text-xs font-bold text-orange-600">
-                  -₱{(discountType === 'percentage' ? (subtotal * (discountValue / 100)) : discountValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  -₱{(manualDiscountEnabled ? (discountType === 'percentage' ? (subtotal * (discountValue / 100)) : discountValue) : 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </span>
               </div>
             </div>
@@ -355,17 +360,14 @@ const QuotationSummary: React.FC<Props> = React.memo(({
             </button>
             <button
               type="button"
-              onClick={handleSaveDraftClick}
-              disabled={!isValid || isSavingDraft}
+              onClick={handleSubmitClick}
+              disabled={!isValid || isSubmitting}
               className={`py-3 px-3 font-bold text-[10px] rounded-xl border transition-all flex items-center justify-center gap-2 active:scale-95 uppercase tracking-wider ${
-                isValid && !isSavingDraft
-                  ? 'bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100'
+                isValid && !isSubmitting
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900 hover:bg-emerald-100'
                   : 'bg-slate-100 text-slate-400 border-slate-100 shadow-none'
               }`}
             >
-              {isSavingDraft ? 'Saving…' : 'Save to Draft Inbox'}
-            </button>
-            <button onClick={handleSubmitClick} disabled={!isValid || isSubmitting} className={`col-span-2 py-3 px-3 font-bold text-[10px] rounded-xl shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center gap-2 active:scale-95 uppercase tracking-wider ${isValid && !isSubmitting ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-slate-100 text-slate-400 shadow-none'}`}>
               {isSubmitting ? 'Processing...' : 'Submit to Pipeline'}
             </button>
         </div>

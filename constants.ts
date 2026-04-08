@@ -49,17 +49,19 @@ export const INITIAL_CUSTOMER: CustomerInfo = {
 export const DEFAULT_PDF_TEMPLATE: PDFTemplate = {
   companyInfo: {
     name: "AA2000 Security and Technology Solutions Inc.",
-    address: "Unit 2C Norkis Building 11 Calbayog St. cor. Libertad, Highway Hills, Mandaluyong City, Philippines 1550",
+    brandName: "AA2000",
+    address:
+      "UNIT 2C NORKIS BUILDING 11 CALBAYOG ST. COR.\nLIBERTAD, HIGHWAY HILLS, MANDALUYONG CITY,\nPHILIPPINES 1550",
     phone: "(02) 8571-56-93; 7155-7010",
     mobile: "09171557010",
-    email: "info.aa2000@gmail.com / aa2000ent@gmail.com",
-    website: "www.aa2000ph.com",
+    email: "INFO.AA2000@GMAIL.COM / AA2000ENT@GMAIL.COM",
+    website: "WWW.AA2000PH.COM",
     companyNameStyle: {
-      fontSize: 16,
+      fontSize: 22,
       color: "#004a8d",
       fontWeight: "900",
       fontFamily: "Inter",
-      italic: true
+      italic: false
     }
   },
   notesAndRemarks: [

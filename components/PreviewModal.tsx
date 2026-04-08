@@ -13,20 +13,26 @@ interface Props {
   laborCost?: number;
   vat: number;
   discountAmount: number;
+  discountValue?: number;
+  discountType?: 'percentage' | 'fixed';
   total: number;
   showVat: boolean;
   onSendEmail: (pdfBlob: Blob) => Promise<void>;
+  onPersistPdf?: (pdfBlob: Blob, fileName: string) => Promise<void>;
   existingQuoteId?: string;
   template: PDFTemplate;
   customFileName: string;
   onCustomFileNameChange: (name: string) => void;
+  headless?: boolean;
+  printRefOverride?: React.RefObject<HTMLDivElement | null>;
 }
 
 const PreviewModal: React.FC<Props> = ({ 
-  isOpen, onClose, items, customer, paymentMethod, subtotal, laborCost = 0, vat, discountAmount, total, showVat, onSendEmail, existingQuoteId, template,
-  customFileName, onCustomFileNameChange
+  isOpen, onClose, items, customer, paymentMethod, subtotal, laborCost = 0, vat, discountAmount, discountValue = 0, discountType = 'percentage', total, showVat, onSendEmail, existingQuoteId, template,
+  customFileName, onCustomFileNameChange, onPersistPdf, headless = false, printRefOverride
 }) => {
   const printRef = useRef<HTMLDivElement>(null);
+  const effectivePrintRef = printRefOverride ?? printRef;
   const [isExporting, setIsExporting] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [scale, setScale] = useState(1);
@@ -63,11 +69,18 @@ const PreviewModal: React.FC<Props> = ({
   }, [isOpen]);
 
   const handleDownload = async () => {
-    if (!printRef.current) return;
+    if (!effectivePrintRef.current) return;
     setIsExporting(true);
     try {
       const filename = customFileName.endsWith('.pdf') ? customFileName : `${customFileName}.pdf`;
-      const pdfBlob = await generateQuotationPDF(printRef.current, filename);
+      const pdfBlob = await generateQuotationPDF(effectivePrintRef.current, filename);
+      if (onPersistPdf) {
+        try {
+          await onPersistPdf(pdfBlob, filename);
+        } catch (err) {
+          console.warn('PDF saved locally but upload failed:', err);
+        }
+      }
       const link = document.createElement('a');
       link.href = URL.createObjectURL(pdfBlob);
       link.download = filename;
@@ -82,11 +95,18 @@ const PreviewModal: React.FC<Props> = ({
   };
 
   const handleSendEmail = async () => {
-    if (!printRef.current) return;
+    if (!effectivePrintRef.current) return;
     setIsSending(true);
     try {
       const filename = customFileName.endsWith('.pdf') ? customFileName : `${customFileName}.pdf`;
-      const pdfBlob = await generateQuotationPDF(printRef.current, filename);
+      const pdfBlob = await generateQuotationPDF(effectivePrintRef.current, filename);
+      if (onPersistPdf) {
+        try {
+          await onPersistPdf(pdfBlob, filename);
+        } catch (err) {
+          console.warn('Email will continue but PDF upload failed:', err);
+        }
+      }
       await onSendEmail(pdfBlob);
       onClose(); 
     } catch (err) {
@@ -96,17 +116,35 @@ const PreviewModal: React.FC<Props> = ({
     }
   };
 
-  if (!isOpen) return null;
+  // Keep PDF math aligned with dashboard overview calculation.
+  const effectiveDiscountAmount = React.useMemo(() => {
+    if (customer.clientType === ClientType.SYSTEM_CONTRACTOR) {
+      return subtotal * 0.2;
+    }
+    return discountType === 'percentage' ? subtotal * (discountValue / 100) : discountValue;
+  }, [customer.clientType, subtotal, discountType, discountValue]);
 
-  // Total after all deductions
-  const finalPayable = subtotal - discountAmount;
+  const effectiveNetTotal = React.useMemo(
+    () => subtotal - effectiveDiscountAmount + laborCost,
+    [subtotal, effectiveDiscountAmount, laborCost]
+  );
+  const effectiveVat = React.useMemo(
+    () => effectiveNetTotal * 0.12,
+    [effectiveNetTotal]
+  );
+  const effectiveGrandTotal = React.useMemo(
+    () => (showVat ? effectiveNetTotal + effectiveVat : effectiveNetTotal),
+    [showVat, effectiveNetTotal, effectiveVat]
+  );
+
+  if (!isOpen && !headless) return null;
   
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-0 sm:p-4">
-      <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md" onClick={onClose} />
+    <div className={headless ? "fixed -left-[200vw] top-0 z-[-1] pointer-events-none opacity-0" : "fixed inset-0 z-[200] flex items-center justify-center p-0 sm:p-4"}>
+      {!headless && <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md" onClick={onClose} />}
       
-      <div className="relative bg-white w-full max-w-5xl h-full sm:h-auto sm:max-h-[95vh] flex flex-col sm:rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
-        <div className="flex flex-col sm:flex-row items-center justify-between p-4 sm:p-6 border-b border-slate-100 bg-white sticky top-0 z-20 gap-4 sm:gap-0">
+      <div className={headless ? "relative bg-white" : "relative bg-white w-full max-w-5xl h-full sm:h-auto sm:max-h-[95vh] flex flex-col sm:rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300"}>
+        {!headless && <div className="flex flex-col sm:flex-row items-center justify-between p-4 sm:p-6 border-b border-slate-100 bg-white sticky top-0 z-20 gap-4 sm:gap-0">
           <div className="text-center sm:text-left">
             <h2 className="text-lg sm:text-xl font-black text-slate-900 uppercase tracking-tight">Document Preview</h2>
             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{quotationNo}</p>
@@ -137,90 +175,94 @@ const PreviewModal: React.FC<Props> = ({
               <svg className="w-6 h-6 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
-        </div>
+        </div>}
 
-        <div className="flex-1 overflow-auto p-4 sm:p-8 bg-slate-200 custom-scrollbar flex justify-center items-start">
+        <div className={headless ? "p-0 bg-transparent flex justify-center items-start" : "flex-1 overflow-auto p-4 sm:p-8 bg-slate-200 custom-scrollbar flex justify-center items-start"}>
           <div 
-            ref={printRef} 
+            ref={effectivePrintRef} 
             className="bg-white flex flex-col text-black relative shrink-0 shadow-lg origin-top overflow-hidden"
             style={{ 
               width: '215.9mm', 
               fontFamily: '"Inter", sans-serif',
-              transform: `scale(${scale})`,
-              marginBottom: scale < 1 ? `-${(1-scale) * 100}%` : '0', 
+              transform: headless ? 'scale(1)' : `scale(${scale})`,
+              marginBottom: headless ? '0' : (scale < 1 ? `-${(1-scale) * 100}%` : '0'), 
             }}
           >
-            {/* PDF-HEADER SECTION */}
-            <div className="pdf-header relative bg-white overflow-hidden h-[130px] border-b-2 border-black">
-              {/* Dark Blue Accent Strip */}
-              <div className="absolute top-0 right-0 w-[72%] h-full bg-[#031b33] origin-top-right -skew-x-[30deg] translate-x-[10%] z-0"></div>
-              {/* Main Blue Background */}
-              <div className="absolute top-0 right-0 w-[68%] h-full bg-[#004a8d] origin-top-right -skew-x-[30deg] translate-x-[15%] z-0"></div>
-              
-              {/* Header Image (Product Showcase) */}
+            {/* PDF-HEADER — solid layers for html2canvas; ~41% brand column, separator, blue contact block */}
+            <div className="pdf-header relative bg-white overflow-hidden min-h-[152px] border-b-2 border-black">
+              <div className="absolute top-0 left-0 h-full w-[41%] bg-white z-0 pointer-events-none" aria-hidden />
+              <div
+                className="absolute top-0 bottom-0 z-[1] pointer-events-none bg-[#031b33]"
+                style={{ left: '41%', width: '2%' }}
+                aria-hidden
+              />
+              <div className="absolute top-0 right-0 bottom-0 left-[43%] bg-[#004a8d] z-0 pointer-events-none" aria-hidden />
+
               {template.companyInfo.headerImage && (
-                <div 
-                  className="absolute z-10"
+                <div
+                  className="absolute z-[5]"
                   style={{
                     left: 0,
                     top: `${template.companyInfo.headerImage.yOffset || 0}px`,
                     width: '100%',
-                    pointerEvents: 'none' // Ensure it doesn't block text selection if overlaying
+                    pointerEvents: 'none',
                   }}
                 >
-                  <img 
-                    src={template.companyInfo.headerImage.url} 
+                  <img
+                    src={template.companyInfo.headerImage.url}
                     alt="Header Decoration"
                     style={{
                       width: `${template.companyInfo.headerImage.width}px`,
                       height: `${template.companyInfo.headerImage.height}px`,
-                      objectFit: 'contain'
-                    }} 
+                      objectFit: 'contain',
+                    }}
                   />
                 </div>
               )}
 
-              <div className="relative z-10 flex w-full h-full items-center px-[12mm]">
-                <div className="w-[45%] flex items-center gap-4">
-                  {/* Logo Area */}
-                  {template.companyInfo.logoUrl && (
-                    <div 
-                      style={{ 
-                        transform: `translate(${template.companyInfo.logoXOffset || 0}px, ${template.companyInfo.logoYOffset || 0}px)` 
-                      }}
-                      className="shrink-0"
-                    >
-                      <img 
-                        src={template.companyInfo.logoUrl} 
-                        alt="Logo" 
-                        style={{ width: `${template.companyInfo.logoWidth || 200}px` }}
-                        className="max-w-full object-contain"
-                      />
-                    </div>
-                  )}
-
-                  {/* Company Name */}
-                  <div className="flex-1 min-w-0">
-                    <h1 
-                      style={{
-                        fontSize: `${template.companyInfo.companyNameStyle?.fontSize || 32}pt`,
-                        color: template.companyInfo.companyNameStyle?.color || '#004a8d',
-                        fontWeight: template.companyInfo.companyNameStyle?.fontWeight || '900',
-                        fontFamily: template.companyInfo.companyNameStyle?.fontFamily || 'Inter',
-                        fontStyle: template.companyInfo.companyNameStyle?.italic ? 'italic' : 'normal',
-                      }}
-                      className="tracking-tighter leading-none uppercase whitespace-pre-wrap"
-                    >
-                      {template.companyInfo.name}
-                    </h1>
+              <div className="relative z-10 flex w-full min-h-[152px] items-stretch py-2">
+                <div className="flex-[0_0_41%] w-[41%] max-w-[41%] box-border flex items-center justify-center px-3 py-1 text-center">
+                  <div className="flex w-full min-h-[7rem] items-center justify-center shrink-0">
+                    {template.companyInfo.logoUrl ? (
+                      <div className="flex h-[100px] w-[180px] items-center justify-center overflow-hidden">
+                        <img
+                          src={template.companyInfo.logoUrl}
+                          alt="Logo"
+                          style={{
+                            width: '120px',
+                            height: 'auto',
+                            transform: `scale(${Math.max(0.25, (template.companyInfo.logoWidth ?? 120) / 120)})`,
+                            transformOrigin: 'center center',
+                          }}
+                          className="object-contain"
+                        />
+                      </div>
+                    ) : (
+                      <div
+                        className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-[#004a8d] shadow-md"
+                        aria-hidden
+                      >
+                        <svg className="h-9 w-9 text-white" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                        </svg>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                <div className="flex-1 flex flex-col justify-center items-center text-center text-white pl-12 pr-4 space-y-1">
-                  <p className="text-[8.5pt] font-black uppercase tracking-wide leading-tight">{template.companyInfo.address}</p>
-                  <p className="text-[8.5pt] font-black uppercase tracking-tight">T: {template.companyInfo.phone} / M: {template.companyInfo.mobile}</p>
-                  <p className="text-[8.5pt] font-black uppercase tracking-tight">E: {template.companyInfo.email}</p>
-                  <p className="text-[9.5pt] font-black uppercase tracking-widest underline">{template.companyInfo.website}</p>
+                <div className="flex-1 min-w-0 flex flex-col justify-center items-stretch text-center text-white px-5 sm:px-6 space-y-0.5 self-center">
+                  <p className="text-[8.5pt] font-black uppercase tracking-wide leading-[1.25] whitespace-pre-line">
+                    {template.companyInfo.address}
+                  </p>
+                  <p className="text-[8.5pt] font-black uppercase tracking-tight leading-tight">
+                    T: {template.companyInfo.phone} / M: {template.companyInfo.mobile}
+                  </p>
+                  <p className="text-[8.5pt] font-black uppercase tracking-tight leading-tight">
+                    E: {template.companyInfo.email}
+                  </p>
+                  <p className="text-[9.5pt] font-black uppercase tracking-widest underline leading-tight">
+                    {template.companyInfo.website}
+                  </p>
                 </div>
               </div>
             </div>
@@ -362,23 +404,23 @@ const PreviewModal: React.FC<Props> = ({
                         <td className="px-2 py-1 text-right">₱{laborCost.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                       </tr>
                     )}
-                    {discountAmount > 0 && (
+                    {effectiveDiscountAmount > 0 && (
                       <tr className="font-black text-red-600">
                         <td colSpan={5} className="border-r border-black px-2 py-1 text-right uppercase">
                           {customer.clientType === ClientType.SYSTEM_CONTRACTOR ? 'ADDITIONAL 20% CONTRACTORS DISCOUNT' : 'MANUAL DISCOUNT'}
                         </td>
-                        <td className="px-2 py-1 text-right">-₱{discountAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                        <td className="px-2 py-1 text-right">-₱{effectiveDiscountAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                       </tr>
                     )}
                     {showVat && (
                       <tr className="font-black text-indigo-600">
                         <td colSpan={5} className="border-r border-black px-2 py-1 text-right uppercase">ADD 12% VAT</td>
-                        <td className="px-2 py-1 text-right">+₱{vat.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                        <td className="px-2 py-1 text-right">+₱{effectiveVat.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                       </tr>
                     )}
                     <tr className="font-black bg-slate-200 border-t border-black">
                       <td colSpan={5} className="border-r border-black px-2 py-1 text-right uppercase text-[9pt]">GRAND TOTAL ({showVat ? 'VAT INCLUSIVE' : 'NET'})</td>
-                      <td className="px-2 py-1 text-right text-[9pt]">₱{total.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                      <td className="px-2 py-1 text-right text-[9pt]">₱{effectiveGrandTotal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -386,7 +428,7 @@ const PreviewModal: React.FC<Props> = ({
 
 
                 <div className="mt-2 text-[8pt] text-slate-400 italic text-right font-bold uppercase tracking-tight">
-                  Calculated {showVat ? 'Gross' : 'Net'} of VAT: ₱{total.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                  Calculated {showVat ? 'Gross' : 'Net'} of VAT: ₱{effectiveGrandTotal.toLocaleString(undefined, {minimumFractionDigits: 2})}
                 </div>
 
 
@@ -395,9 +437,9 @@ const PreviewModal: React.FC<Props> = ({
                   <div className="bg-[#FFFF00] text-center text-black font-black text-[8pt] border-b border-black py-1 uppercase tracking-widest">NOTE AND REMARKS: ALL INDICATED BELOW SHALL BE BILLED SEPARATELY</div>
                   <div className="p-2 space-y-1">
                     {template.notesAndRemarks.map((note, idx) => (
-                      <div key={idx} className="flex text-[7.2pt] font-bold uppercase text-slate-800 whitespace-pre-wrap">
-                        <span className="w-6 text-center shrink-0">{idx + 1}</span>
-                        <span>{note}</span>
+                      <div key={idx} className="grid grid-cols-[24px_1fr] gap-1 text-[7.2pt] font-bold uppercase text-slate-800 leading-[1.45]">
+                        <span className="text-center shrink-0 leading-[1.45]">{idx + 1}</span>
+                        <span className="whitespace-pre-wrap break-words leading-[1.45]">{note}</span>
                       </div>
                     ))}
                   </div>
@@ -410,9 +452,9 @@ const PreviewModal: React.FC<Props> = ({
                 <div className="bg-[#003366] text-white text-center font-bold text-[9pt] border-b border-black py-1.5 uppercase tracking-widest">TERMS AND CONDITIONS</div>
                 <div className="p-3 space-y-1.5">
                   {template.termsAndConditions.map((term, idx) => (
-                    <div key={idx} className="flex text-[7.2pt] font-bold uppercase leading-relaxed text-slate-800">
-                      <span className="w-6 text-center shrink-0">{term.key}</span>
-                      <span>{term.value}</span>
+                    <div key={idx} className="grid grid-cols-[24px_1fr] gap-1 text-[7.2pt] font-bold uppercase text-slate-800 leading-[1.45]">
+                      <span className="text-center shrink-0 leading-[1.45]">{term.key}</span>
+                      <span className="whitespace-pre-wrap break-words leading-[1.45]">{term.value}</span>
                     </div>
                   ))}
                 </div>

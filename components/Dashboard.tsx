@@ -271,9 +271,10 @@ const Dashboard: React.FC<DashboardProps> = ({
       const files = await fetchEstimationFiles();
       setEstimationFiles(files);
     } catch (e: any) {
-      const msg = e?.message || 'Failed to load estimation files';
+      // Keep inbox usable even when backend routes are unavailable.
+      const msg = 'Estimation inbox is temporarily unavailable. You can continue using Quotation Studio and refresh later.';
       setEstimationError(msg);
-      showToast(msg, 'error');
+      showToast('Estimation inbox not available right now. You can still proceed with quotation.', 'info');
     } finally {
       setIsLoadingEstimations(false);
     }
@@ -1217,7 +1218,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               </div>
 
               {estimationError && (
-                <div className="mb-6 bg-red-50 border border-red-100 text-red-700 text-sm rounded-xl px-4 py-3">
+                <div className="mb-6 bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl px-4 py-3">
                   {estimationError}
                 </div>
               )}

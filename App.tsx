@@ -447,6 +447,53 @@ function shouldClearInvalidSession(): boolean {
   return parsed === true;
 }
 
+function canBypassAuthOnLocalhost(): boolean {
+  const env = (import.meta as any).env ?? {};
+  const parsed = parseBooleanEnv(env.VITE_AUTH_BYPASS_LOCAL);
+  if (parsed !== true) return false;
+  const host = String(window.location.hostname || '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
+function looksLikeEncryptedLaunchToken(value: string): boolean {
+  const s = String(value || '').trim();
+  if (!s) return false;
+  // Portal format: base64url, IV(12) + ciphertext + tag(16) => at least 28 bytes payload
+  if (!/^[A-Za-z0-9\-_]+$/.test(s)) return false;
+  return s.length >= 38;
+}
+
+function normalizeLaunchTokenForVerify(value: string): string | null {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  let candidate = raw;
+  if (raw.includes('%')) {
+    try {
+      candidate = decodeURIComponent(raw);
+    } catch {
+      return null;
+    }
+  }
+  return looksLikeEncryptedLaunchToken(candidate) ? candidate : null;
+}
+
+function buildLocalBypassProfile(role: UserRole): SessionUserProfile {
+  const label = role === 'ADMIN' ? 'System Admin' : 'Sales Employee';
+  return {
+    sessionId: null,
+    sessionToken: null,
+    sessionCreatedAt: null,
+    acc_ID: null,
+    username: null,
+    role_ID: null,
+    role_name: role,
+    status: 'LOCAL_BYPASS',
+    employee: null,
+    displayName: `${label} (Local)`,
+    initials: role === 'ADMIN' ? 'SA' : 'SE',
+  };
+}
+
 function getRawQueryParam(search: string, key: string): string | null {
   if (!search) return null;
   const q = search.startsWith('?') ? search.slice(1) : search;
@@ -693,7 +740,11 @@ const App: React.FC = () => {
 
       let sessionData = await verifySessionToken(storedSessionToken);
       if (!isCompleteSessionPayload(sessionData)) {
-        sessionData = await verifyLaunchToken(storedSessionToken);
+        // verify-launch typically expects the raw encrypted launch token, not decrypted session id
+        const verifyCandidate = normalizeLaunchTokenForVerify(storedSessionToken);
+        if (verifyCandidate) {
+          sessionData = await verifyLaunchToken(verifyCandidate);
+        }
       }
       if (isCompleteSessionPayload(sessionData)) {
         await persistVerifiedSession(sessionData);
@@ -782,18 +833,48 @@ const App: React.FC = () => {
           }
 
           // Fallback: some backends only expose verify-launch route.
-          const launchData = await verifyLaunchToken(storedSessionToken);
-          if (!cancelled && isCompleteSessionPayload(launchData)) {
-            try {
-              if (launchData.session?.s_name) {
-                await setSessionTokenSecure(String(launchData.session.s_name));
+          // Prefer raw launch token from URL; using decrypted session token here can cause 400.
+          const verifyLaunchCandidateRaw = launchToken || storedSessionToken;
+          const verifyLaunchCandidate = normalizeLaunchTokenForVerify(verifyLaunchCandidateRaw);
+          if (verifyLaunchCandidate) {
+            const launchData = await verifyLaunchToken(verifyLaunchCandidate);
+            if (!cancelled && isCompleteSessionPayload(launchData)) {
+              try {
+                if (launchData.session?.s_name) {
+                  await setSessionTokenSecure(String(launchData.session.s_name));
+                }
+              } catch {
+                // ignore
               }
-            } catch {
-              // ignore
+              if (!cancelled) await persistVerifiedSession(launchData);
+              return;
             }
-            if (!cancelled) await persistVerifiedSession(launchData);
-            return;
+          } else {
+            authDebugLog('verify-launch skipped: malformed token candidate', {
+              hasLaunchToken: !!launchToken,
+              hasStoredToken: !!storedSessionToken,
+            });
           }
+        }
+
+        // Local dev escape hatch: allow localhost usage without session only when there is no incoming/stored token.
+        // If URL/session already has a token, enforce real backend verification.
+        const hasIncomingSessionHints =
+          !!launchToken ||
+          !!accountIdFromUrl ||
+          !!getRawQueryParam(window.location.search || '', '__launch') ||
+          !!getRawQueryParam(window.location.search || '', '_launch') ||
+          !!getRawQueryParam(window.location.search || '', 's_name') ||
+          !!getRawQueryParam(window.location.search || '', '__actor') ||
+          !!getRawQueryParam(window.location.search || '', 'acc_ID') ||
+          !!storedSessionToken;
+        if (!cancelled && canBypassAuthOnLocalhost() && !hasIncomingSessionHints) {
+          const fallbackRole = normalizeUserRole(localStorage.getItem('userRole') || 'SALES');
+          setUserRole(fallbackRole);
+          setHasValidSession(true);
+          setSessionProfile(buildLocalBypassProfile(fallbackRole));
+          authDebugLog('auth bypassed on localhost', { role: fallbackRole });
+          return;
         }
 
         // No valid session -> block access

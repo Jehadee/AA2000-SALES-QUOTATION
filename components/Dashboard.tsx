@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, PanelLeftClose, PanelLeft } from 'lucide-react';
-import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile } from '../types';
+import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, PanelLeftClose, PanelLeft, User } from 'lucide-react';
+import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile, SessionUserProfile } from '../types';
 import { PRODUCTS, COMPANY_DETAILS, DEFAULT_PDF_TEMPLATE, INITIAL_CUSTOMER } from '../constants';
 import { processConversation } from '../services/geminiService';
 import { db, saveCatalog, savePipeline, saveAdminLogs, saveSettings, getSettings, saveCurrentAppState, getCurrentAppState } from '../services/db';
@@ -22,11 +22,17 @@ import { deriveTierPricesFromBasePrice } from '../services/pricing';
 import * as XLSX from 'xlsx';
 import { fetchAllyOpportunities } from '../services/allyOpportunitiesApi';
 import { fetchEstimationFiles, type EstimationFileRecord } from '../services/estimationApi';
+import ProfileScreen from './ProfileScreen';
 
 interface DashboardProps {
   onLogout: () => void;
   userRole: UserRole;
+  sessionProfile: SessionUserProfile | null;
+  onRefreshSessionProfile: () => Promise<void>;
+  isRefreshingProfile: boolean;
 }
+
+type DashboardTab = 'estimation' | 'quotation' | 'pipeline' | 'profile' | 'admin';
 
 export interface Message {
   role: 'user' | 'model';
@@ -34,7 +40,13 @@ export interface Message {
   attachments?: { type: string; data: string; name?: string }[];
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
+const Dashboard: React.FC<DashboardProps> = ({
+  onLogout,
+  userRole,
+  sessionProfile,
+  onRefreshSessionProfile,
+  isRefreshingProfile,
+}) => {
   const [items, setItems] = useState<SelectedItem[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [laborServices, setLaborServices] = useState<LaborService[]>([]);
@@ -45,7 +57,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   const [manualDiscountEnabled, setManualDiscountEnabled] = useState<boolean>(true);
   const [showVat, setShowVat] = useState<boolean>(true);
   const [currentStatus, setCurrentStatus] = useState<QuotationStatus>(QuotationStatus.INQUIRY);
-  const [activeTab, setActiveTab] = useState<'estimation' | 'quotation' | 'pipeline' | 'admin'>('estimation');
+  const [activeTab, setActiveTab] = useState<DashboardTab>('estimation');
+  const [roleWarningModal, setRoleWarningModal] = useState<{ open: boolean; message: string }>({
+    open: false,
+    message: '',
+  });
   
   const [messages, setMessages] = useState<Message[]>([
     { role: 'model', content: "Hello! I'm your AA2000 Sales Assistant. I can help you build quotations faster. Just tell me what products you need, or upload a photo of a hand-written BOM or an Excel file!" }
@@ -78,6 +94,38 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   const processedAllyOpportunityIdsRef = useRef<Set<string>>(new Set());
   const latestDesignedPdfRef = useRef<{ blob: Blob; fileName: string; at: number } | null>(null);
   const submitPipelinePrintRef = useRef<HTMLDivElement>(null);
+
+  const canAccessTab = useCallback(
+    (tab: DashboardTab): boolean => {
+      if (tab === 'admin') return userRole === 'ADMIN';
+      return true;
+    },
+    [userRole]
+  );
+
+  const requestTabChange = useCallback(
+    (tab: DashboardTab) => {
+      if (canAccessTab(tab)) {
+        setActiveTab(tab);
+        return;
+      }
+      setRoleWarningModal({
+        open: true,
+        message: 'Access denied: your account role does not have permission to open this screen.',
+      });
+    },
+    [canAccessTab]
+  );
+
+  useEffect(() => {
+    if (!canAccessTab(activeTab)) {
+      setActiveTab('quotation');
+      setRoleWarningModal({
+        open: true,
+        message: 'Your role changed and this screen is restricted. You were redirected to Quotation Studio.',
+      });
+    }
+  }, [activeTab, canAccessTab]);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -282,9 +330,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
 
   const handleCreateQuotationFromEstimation = useCallback((file: EstimationFileRecord) => {
     setSelectedEstimationFile(file);
-    setActiveTab('quotation');
+    requestTabChange('quotation');
     showToast(`Loaded ${file.filename}. You can draft while viewing the source file.`, 'info');
-  }, []);
+  }, [requestTabChange]);
 
   const getPriceForClient = useCallback((product: Product, clientType: ClientType, volume: number): number => {
     const tier = deriveTierPricesFromBasePrice(product.baseCost || 0);
@@ -795,7 +843,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     setPdfFileName('');
     setPreviewId(resetReference);
     setSelectedQuoteId(null);
-    setActiveTab('pipeline');
+    requestTabChange('pipeline');
     await saveCurrentAppState({
       id: 'current',
       items: [],
@@ -1034,7 +1082,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
               <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Workspaces</p>
               <nav className="space-y-1">
                 <button
-                  onClick={() => setActiveTab('estimation')}
+                  onClick={() => requestTabChange('estimation')}
                   className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'estimation' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                 >
                   <div className={`p-2 rounded-lg transition-colors ${activeTab === 'estimation' ? 'bg-amber-500/10 text-amber-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
@@ -1047,7 +1095,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                 </button>
 
                 <button
-                  onClick={() => setActiveTab('quotation')}
+                  onClick={() => requestTabChange('quotation')}
                   className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'quotation' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                 >
                   <div className={`p-2 rounded-lg transition-colors ${activeTab === 'quotation' ? 'bg-cyan-500/10 text-cyan-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
@@ -1060,7 +1108,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                 </button>
 
                 <button
-                  onClick={() => setActiveTab('pipeline')}
+                  onClick={() => requestTabChange('pipeline')}
                   className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'pipeline' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                 >
                   <div className={`p-2 rounded-lg transition-colors ${activeTab === 'pipeline' ? 'bg-purple-500/10 text-purple-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
@@ -1072,9 +1120,22 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                   </div>
                 </button>
 
+                <button
+                  onClick={() => requestTabChange('profile')}
+                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'profile' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
+                >
+                  <div className={`p-2 rounded-lg transition-colors ${activeTab === 'profile' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
+                    <User size={18} />
+                  </div>
+                  <div className="text-left">
+                    <span className="block font-bold">Profile</span>
+                    <span className="block text-[10px] opacity-60 font-normal mt-0.5">SESSION & ACCOUNT</span>
+                  </div>
+                </button>
+
                 {userRole === 'ADMIN' && (
                   <button
-                    onClick={() => setActiveTab('admin')}
+                    onClick={() => requestTabChange('admin')}
                     className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'admin' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                   >
                     <div className={`p-2 rounded-lg transition-colors ${activeTab === 'admin' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
@@ -1095,11 +1156,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
           <div className="flex items-center justify-between group">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800">
-                {userRole === 'ADMIN' ? 'SA' : 'SE'}
+                {sessionProfile?.initials ?? (userRole === 'ADMIN' ? 'SA' : 'SE')}
               </div>
               <div>
                 <p className="text-xs font-bold text-white">
-                  {userRole === 'ADMIN' ? 'System Admin' : 'Sales Employee'}
+                  {sessionProfile?.displayName ?? (userRole === 'ADMIN' ? 'System Admin' : 'Sales Employee')}
                 </p>
                 <p className="text-[9px] text-emerald-400 font-bold tracking-wider uppercase flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
@@ -1540,6 +1601,30 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
           </div>
         )}
 
+        {activeTab === 'profile' && (
+          <>
+            {sessionProfile ? (
+              <ProfileScreen
+                profile={sessionProfile}
+                isRefreshing={isRefreshingProfile}
+                onRefresh={() => void onRefreshSessionProfile()}
+              />
+            ) : (
+              <div className="p-8 max-w-3xl mx-auto min-h-full flex flex-col items-center justify-center gap-4">
+                <p className="text-sm text-slate-600 font-medium">Loading your profile...</p>
+                <button
+                  type="button"
+                  onClick={() => void onRefreshSessionProfile()}
+                  className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-indigo-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-indigo-500"
+                >
+                  <RefreshCw size={14} className={isRefreshingProfile ? 'animate-spin' : ''} />
+                  Retry
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
         {activeTab === 'admin' && (
           <div className="p-8 max-w-7xl mx-auto">
              <AdminPanel 
@@ -1655,7 +1740,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
             setShowVat(q.showVat ?? true);
             setPaymentMethod(q.paymentMethod);
             setPreviewId(q.id);
-            setActiveTab('quotation');
+            requestTabChange('quotation');
             setSelectedQuoteId(null);
           }}
           onPreviewPDF={() => {
@@ -1674,6 +1759,36 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
           }}
           onPromoteFromDraft={handlePromoteFromDraft}
         />
+      )}
+      {roleWarningModal.open && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/70 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white border border-slate-200 shadow-2xl p-6">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest mb-1">Navigation blocked</p>
+                <h3 className="text-lg font-black text-slate-900">Role mismatch</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRoleWarningModal({ open: false, message: '' })}
+                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100"
+                aria-label="Close role warning"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <p className="mt-3 text-sm text-slate-600">{roleWarningModal.message}</p>
+            <div className="mt-6 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setRoleWarningModal({ open: false, message: '' })}
+                className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-indigo-500"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

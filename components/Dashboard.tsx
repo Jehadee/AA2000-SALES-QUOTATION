@@ -782,14 +782,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     }
     showToast('Quote submitted. Customer saved to backend; quotation saved to pipeline.');
     const resetReference = `PQ-FDAS-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
+    const clearedCustomer: CustomerInfo = { ...INITIAL_CUSTOMER, clientType: ClientType.END_USER };
     setItems([]);
     setUploadedFiles([]);
     setLaborServices([]);
-    setCustomer(INITIAL_CUSTOMER);
+    setCustomer(clearedCustomer);
     setPaymentMethod(PaymentMethod.BANK_TRANSFER);
     setDiscountValue(0);
     setDiscountType('percentage');
-    setManualDiscountEnabled(true);
+    setManualDiscountEnabled(false);
     setShowVat(true);
     setCurrentStatus(QuotationStatus.INQUIRY);
     setPdfFileName('');
@@ -801,12 +802,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
       items: [],
       uploadedFiles: [],
       laborServices: [],
-      customer: INITIAL_CUSTOMER,
+      customer: clearedCustomer,
       paymentMethod: PaymentMethod.BANK_TRANSFER,
       discountPercent: 0,
       discountType: 'percentage',
       discountValue: 0,
-      manualDiscountEnabled: true,
+      manualDiscountEnabled: false,
       showVat: true,
       currentStatus: QuotationStatus.INQUIRY,
       pdfFileName: '',

@@ -1,7 +1,21 @@
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 
-export const generateQuotationPDF = async (element: HTMLElement, filename: string): Promise<Blob> => {
+/** Optional tuning for html2canvas + export. `pipelineFast` presets speed-oriented values for server upload. */
+export type GenerateQuotationPdfOptions = {
+  pipelineFast?: boolean;
+  scale?: number;
+  jpegQuality?: number;
+  /** Max ms to wait for fonts (pipeline only); default full wait when not pipelineFast */
+  fontWaitMs?: number;
+  imageTimeout?: number;
+};
+
+export const generateQuotationPDF = async (
+  element: HTMLElement,
+  filename: string,
+  options?: GenerateQuotationPdfOptions,
+): Promise<Blob> => {
   if (!element) {
     throw new Error('Unable to generate PDF: missing document element.');
   }
@@ -79,13 +93,14 @@ export const generateQuotationPDF = async (element: HTMLElement, filename: strin
     );
   };
 
-  const isCanvasLikelyBlank = (canvas: HTMLCanvasElement): boolean => {
+  const isCanvasLikelyBlank = (canvas: HTMLCanvasElement, coarse = false): boolean => {
     if (!canvas.width || !canvas.height) return true;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return true;
     const { width, height } = canvas;
-    const sampleStepX = Math.max(1, Math.floor(width / 24));
-    const sampleStepY = Math.max(1, Math.floor(height / 24));
+    const grid = coarse ? 12 : 24;
+    const sampleStepX = Math.max(1, Math.floor(width / grid));
+    const sampleStepY = Math.max(1, Math.floor(height / grid));
     let nonWhite = 0;
     let sampled = 0;
     for (let y = 0; y < height; y += sampleStepY) {
@@ -121,18 +136,31 @@ export const generateQuotationPDF = async (element: HTMLElement, filename: strin
 
     document.body.appendChild(clone);
 
+    const fast = !!options?.pipelineFast;
+    const scale = options?.scale ?? (fast ? 1.45 : 2);
+    const jpegQuality = options?.jpegQuality ?? (fast ? 0.92 : 0.98);
+    const imageTimeout = options?.imageTimeout ?? (fast ? 10000 : 15000);
+    const fontWaitMs = options?.fontWaitMs ?? (fast ? 900 : undefined);
+
     let canvas: HTMLCanvasElement;
     try {
       if (typeof document !== 'undefined' && document.fonts?.ready) {
-        try {
-          await document.fonts.ready;
-        } catch {
-          /* ignore */
+        if (fast && typeof fontWaitMs === 'number') {
+          await Promise.race([
+            document.fonts.ready.catch(() => undefined),
+            new Promise<void>((r) => setTimeout(r, fontWaitMs)),
+          ]);
+        } else {
+          try {
+            await document.fonts.ready;
+          } catch {
+            /* ignore */
+          }
         }
       }
       await waitForImages(clone);
       await waitNextFrame();
-      await waitNextFrame();
+      if (!fast) await waitNextFrame();
 
       const scrollW = Math.ceil(clone.scrollWidth || clone.offsetWidth);
       const scrollH = Math.ceil(clone.scrollHeight || clone.offsetHeight);
@@ -143,11 +171,11 @@ export const generateQuotationPDF = async (element: HTMLElement, filename: strin
 
       // Width/height left unset so render size follows parsed element bounds; scroll forced to origin.
       const baseOptions = {
-        scale: 2,
+        scale,
         useCORS: true,
         backgroundColor: '#ffffff',
         logging: false,
-        imageTimeout: 15000,
+        imageTimeout,
         scrollX: 0,
         scrollY: 0,
         windowWidth,
@@ -186,12 +214,12 @@ export const generateQuotationPDF = async (element: HTMLElement, filename: strin
           ...baseOptions,
           foreignObjectRendering: true,
         });
-        if (isCanvasLikelyBlank(canvas)) {
+        if (isCanvasLikelyBlank(canvas, fast)) {
           throw new Error('Blank canvas from foreignObject rendering');
         }
       } catch (primaryError) {
         canvas = await html2canvas(clone, sanitizedFallbackOptions);
-        if (isCanvasLikelyBlank(canvas)) {
+        if (isCanvasLikelyBlank(canvas, fast)) {
           throw new Error('Blank canvas from fallback rendering');
         }
       }
@@ -200,7 +228,7 @@ export const generateQuotationPDF = async (element: HTMLElement, filename: strin
     }
 
     // JPEG avoids PNG alpha/compositing artifacts (black fills) in some PDF viewers.
-    const imgData = canvas.toDataURL('image/jpeg', 0.98);
+    const imgData = canvas.toDataURL('image/jpeg', jpegQuality);
     
     // Calculate PDF height based on aspect ratio to maintain width at 215.9mm
     const pdfHeight = (canvas.height * LEGAL_WIDTH) / canvas.width;

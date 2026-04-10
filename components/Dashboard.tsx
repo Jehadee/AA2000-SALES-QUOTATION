@@ -15,8 +15,15 @@ import ExcelImporter from './ExcelImporter';
 import AIChat from './AIChat';
 import { sendQuotationEmail } from '../services/emailService';
 import { blobToBase64, generateQuotationPDF } from '../services/pdfService';
-import { addCustomer } from '../services/customerApi';
-import { triggerPipelineUploadHook, uploadQuotationFile } from '../services/quotationFileApi';
+import { addCustomer, extractCustomerIdFromAddResponse } from '../services/customerApi';
+import {
+  triggerPipelineUploadHook,
+  uploadQuotationFile,
+  saveQuotationProject,
+  saveProjectDetails,
+  pickProjectIdFromSaveQuotationResponse,
+  toSqlDateOnly,
+} from '../services/quotationFileApi';
 import { fetchProducts } from '../services/productsApi';
 import { deriveTierPricesFromBasePrice } from '../services/pricing';
 import * as XLSX from 'xlsx';
@@ -26,6 +33,51 @@ import { fetchEstimationFiles, type EstimationFileRecord } from '../services/est
 interface DashboardProps {
   onLogout: () => void;
   userRole: UserRole;
+  /** Logged-in user's server Account_ID (pipeline isolation for SALES). */
+  accountId: string;
+  displayName: string;
+}
+
+function sanitizeAccountFileToken(s: string): string {
+  const t = (s || '').trim().replace(/[^a-zA-Z0-9._-]+/g, '_');
+  return t.slice(0, 40) || 'User';
+}
+
+/** Stable key for reusing a designed PDF (e.g. after Download) when submitting the same quotation. */
+function buildQuotationPdfContentKey(params: {
+  previewId: string;
+  items: SelectedItem[];
+  laborServices: LaborService[];
+  customer: CustomerInfo;
+  paymentMethod: PaymentMethod;
+  manualDiscountEnabled: boolean;
+  discountValue: number;
+  discountType: 'percentage' | 'fixed';
+  showVat: boolean;
+  pdfTemplate: PDFTemplate;
+  accountId: string;
+  ownerLabel: string;
+}): string {
+  return JSON.stringify({
+    previewId: params.previewId,
+    items: params.items.map((i) => ({
+      id: i.id,
+      q: i.quantity,
+      p: i.price,
+      name: i.name,
+      model: i.model,
+    })),
+    labor: params.laborServices,
+    customer: params.customer,
+    pm: params.paymentMethod,
+    mde: params.manualDiscountEnabled,
+    dv: params.discountValue,
+    dt: params.discountType,
+    vat: params.showVat,
+    tpl: params.pdfTemplate,
+    aid: params.accountId,
+    own: params.ownerLabel,
+  });
 }
 
 export interface Message {
@@ -34,7 +86,7 @@ export interface Message {
   attachments?: { type: string; data: string; name?: string }[];
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
+const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole, accountId, displayName }) => {
   const [items, setItems] = useState<SelectedItem[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [laborServices, setLaborServices] = useState<LaborService[]>([]);
@@ -76,7 +128,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const chatSensorRef = useRef<HTMLDivElement>(null);
   const processedAllyOpportunityIdsRef = useRef<Set<string>>(new Set());
-  const latestDesignedPdfRef = useRef<{ blob: Blob; fileName: string; at: number } | null>(null);
+  const latestDesignedPdfRef = useRef<{
+    blob: Blob;
+    fileName: string;
+    at: number;
+    contentKey: string;
+  } | null>(null);
   const submitPipelinePrintRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -486,9 +543,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
         attachments: [],
         version: 1,
         isDraft: false,
+        accountId: (accountId || '').trim() || undefined,
+        ownerLabel: (displayName || '').trim() || undefined,
       };
     },
-    [dynamicProducts, getPriceForClient]
+    [dynamicProducts, getPriceForClient, accountId, displayName]
   );
 
   // Poll Ally Virtual opportunities (webhook -> server -> this importer -> local pipeline)
@@ -718,11 +777,51 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     }
   };
 
+  const quotationPdfContentKey = useMemo(
+    () =>
+      buildQuotationPdfContentKey({
+        previewId,
+        items,
+        laborServices,
+        customer,
+        paymentMethod,
+        manualDiscountEnabled,
+        discountValue,
+        discountType,
+        showVat,
+        pdfTemplate,
+        accountId: (accountId || '').trim(),
+        ownerLabel: (displayName || '').trim(),
+      }),
+    [
+      previewId,
+      items,
+      laborServices,
+      customer,
+      paymentMethod,
+      manualDiscountEnabled,
+      discountValue,
+      discountType,
+      showVat,
+      pdfTemplate,
+      accountId,
+      displayName,
+    ],
+  );
+
   const handleSubmitPipeline = async () => {
     if (!isFormValid || items.length === 0) return;
 
+    const sessionAccount = (accountId || '').trim();
+    if (!sessionAccount) {
+      showToast('Missing Account ID. Log out and sign in with your server Account_ID.', 'error');
+      return;
+    }
+
+    let customerBackendId: string | undefined;
     try {
-      await addCustomer(customer);
+      const addRes = await addCustomer(customer);
+      customerBackendId = extractCustomerIdFromAddResponse(addRes);
     } catch (e: any) {
       showToast(`Submit failed: ${e?.message || 'Could not reach server'}`, 'error');
       return;
@@ -736,6 +835,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     const vat = netTotal * 0.12;
     const finalTotal = showVat ? netTotal + vat : netTotal;
     const newId = `PQ-${Date.now().toString().slice(-6)}`;
+    const pdfFileSafe = `${newId}_ACC-${sanitizeAccountFileToken(sessionAccount)}.pdf`;
+    const ownerShort = (displayName || '').trim() || sessionAccount;
     const newQuote: QuotationRecord = {
       id: newId,
       items: [...items],
@@ -747,42 +848,58 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
       discountValue: effectiveDiscountValue,
       showVat,
       status: currentStatus === QuotationStatus.INQUIRY ? QuotationStatus.PREPARATION : currentStatus,
-      total: finalTotal, createdAt: new Date().toISOString(),
-      logs: [{ date: new Date().toISOString(), note: 'Quotation created in system.', user: 'Staff Admin' }],
-      attachments: [], version: 1,
+      total: finalTotal,
+      createdAt: new Date().toISOString(),
+      logs: [
+        {
+          date: new Date().toISOString(),
+          note: `Quotation created in system (Account: ${sessionAccount}).`,
+          user: ownerShort,
+        },
+      ],
+      attachments: [],
+      version: 1,
       isDraft: false,
+      accountId: sessionAccount,
+      ownerLabel: ownerShort,
     };
-    await persistQuotes([newQuote, ...savedQuotes]);
-    let designedPdfBlob: Blob | undefined;
-    try {
-      if (submitPipelinePrintRef.current) {
-        designedPdfBlob = await generateQuotationPDF(submitPipelinePrintRef.current, `${newQuote.id}.pdf`);
-        latestDesignedPdfRef.current = { blob: designedPdfBlob, fileName: `${newQuote.id}.pdf`, at: Date.now() };
-      }
-    } catch (e: any) {
-      showToast(`Designed PDF generation failed, using fallback upload: ${e?.message || 'PDF error'}`, 'info');
-    }
 
-    const cachedDesignedPdf = designedPdfBlob
-      ? { blob: designedPdfBlob, fileName: `${newQuote.id}.pdf`, at: Date.now() }
-      : latestDesignedPdfRef.current;
-    const useDesignedPdf = !!cachedDesignedPdf;
-    try {
-      await triggerPipelineUploadHook({
-        quoteId: newQuote.id,
-        customerName: newQuote.customer.fullName || newQuote.customer.companyName,
-        total: newQuote.total,
-        createdAt: newQuote.createdAt,
-        pdfBlob: useDesignedPdf ? cachedDesignedPdf.blob : undefined,
-        fileName: useDesignedPdf ? `${newQuote.id}.pdf` : undefined,
-      });
-      if (!useDesignedPdf) showToast('Pipeline uploaded using fallback PDF.', 'info');
-    } catch (e: any) {
-      showToast(`Pipeline upload trigger failed: ${e?.message || 'Server error'}`, 'error');
-    }
-    showToast('Quote submitted. Customer saved to backend; quotation saved to pipeline.');
+    const pdfKey = quotationPdfContentKey;
+    const cachedDesigned = latestDesignedPdfRef.current;
+    const reusePdf =
+      !!cachedDesigned &&
+      cachedDesigned.contentKey === pdfKey &&
+      cachedDesigned.blob &&
+      cachedDesigned.blob.size > 0;
+
+    let designedPdfBlob: Blob | undefined = reusePdf ? cachedDesigned.blob : undefined;
+    const persistP = persistQuotes([newQuote, ...savedQuotes]);
+
+    const genP =
+      !reusePdf && submitPipelinePrintRef.current
+        ? generateQuotationPDF(submitPipelinePrintRef.current, pdfFileSafe, { pipelineFast: true })
+            .then((pdf) => {
+              designedPdfBlob = pdf;
+              latestDesignedPdfRef.current = {
+                blob: pdf,
+                fileName: pdfFileSafe,
+                at: Date.now(),
+                contentKey: pdfKey,
+              };
+            })
+            .catch((e: any) => {
+              showToast(`Designed PDF generation failed, using fallback upload: ${e?.message || 'PDF error'}`, 'info');
+              designedPdfBlob = undefined;
+            })
+        : Promise.resolve();
+
+    await persistP;
+    await genP;
+
     const resetReference = `PQ-FDAS-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
     const clearedCustomer: CustomerInfo = { ...INITIAL_CUSTOMER, clientType: ClientType.END_USER };
+
+    showToast('Quote submitted. Customer saved; quotation added to pipeline. PDF sync runs in the background.');
     setItems([]);
     setUploadedFiles([]);
     setLaborServices([]);
@@ -797,7 +914,22 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     setPreviewId(resetReference);
     setSelectedQuoteId(null);
     setActiveTab('pipeline');
-    await saveCurrentAppState({
+
+    const uploadSnapshot = {
+      quoteId: newQuote.id,
+      customerName: newQuote.customer.fullName || newQuote.customer.companyName,
+      total: newQuote.total,
+      createdAt: newQuote.createdAt,
+      pdfBlob: designedPdfBlob,
+      fileName: designedPdfBlob ? pdfFileSafe : undefined,
+      accountId: sessionAccount,
+      ownerLabel: ownerShort,
+      customerBackendId,
+      pipelineStatus: newQuote.status,
+      projectFor: newQuote.customer.projectFor || null,
+    };
+
+    void saveCurrentAppState({
       id: 'current',
       items: [],
       uploadedFiles: [],
@@ -812,7 +944,76 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
       currentStatus: QuotationStatus.INQUIRY,
       pdfFileName: '',
       referenceCode: resetReference,
-    });
+    }).catch(() => {});
+
+    const patchQuoteServerId = (projId: string | number | undefined) => {
+      if (projId == null) return;
+      setSavedQuotes((prev) => {
+        const next = prev.map((q) => (q.id === newId ? { ...q, serverProjId: projId } : q));
+        void savePipeline(next);
+        return next;
+      });
+    };
+
+    void (async () => {
+      try {
+        const uploadRes = await triggerPipelineUploadHook({
+          quoteId: uploadSnapshot.quoteId,
+          customerName: uploadSnapshot.customerName,
+          total: uploadSnapshot.total,
+          createdAt: uploadSnapshot.createdAt,
+          pdfBlob: uploadSnapshot.pdfBlob,
+          fileName: uploadSnapshot.fileName,
+          accountId: uploadSnapshot.accountId,
+          ownerLabel: uploadSnapshot.ownerLabel,
+        });
+        const quotationFilePath = uploadRes?.filePath || uploadRes?.file_path;
+        try {
+          const saveRes = await saveQuotationProject({
+            AccountId: uploadSnapshot.accountId,
+            customerID: uploadSnapshot.customerBackendId,
+            clientID: uploadSnapshot.customerBackendId,
+            status: String(uploadSnapshot.pipelineStatus),
+            Start_date: uploadSnapshot.createdAt,
+            quotationFilePath: quotationFilePath != null ? String(quotationFilePath) : null,
+            activity: `Quotation ${uploadSnapshot.quoteId}`,
+            objective: uploadSnapshot.projectFor,
+          });
+          const projId = pickProjectIdFromSaveQuotationResponse(saveRes);
+          patchQuoteServerId(projId);
+          const accountNum = Number(uploadSnapshot.accountId);
+          if (projId != null && Number.isFinite(accountNum)) {
+            try {
+              await saveProjectDetails({
+                Proj_ID: projId,
+                Account_ID: accountNum,
+                Status: 'PENDING',
+                Customer_ID: uploadSnapshot.customerBackendId ?? null,
+                Start_date: toSqlDateOnly(uploadSnapshot.createdAt),
+                FilePath: quotationFilePath != null ? String(quotationFilePath) : null,
+                deposit_amount: 0,
+                current_balance: null,
+                application: 'QOUTATION',
+                activity: `Quotation ${uploadSnapshot.quoteId}`,
+                objective: uploadSnapshot.projectFor,
+              });
+            } catch (detailsErr: any) {
+              console.warn('save/project_details:', detailsErr);
+              showToast(
+                `Project saved, but project_details failed: ${detailsErr?.message || 'Server error'}`,
+                'error',
+              );
+            }
+          }
+        } catch (saveErr: any) {
+          console.warn('save/quotation:', saveErr);
+          showToast(`Quotation file uploaded, but project save failed: ${saveErr?.message || 'Server error'}`, 'error');
+        }
+        if (!uploadSnapshot.pdfBlob) showToast('Pipeline uploaded using fallback PDF.', 'info');
+      } catch (e: any) {
+        showToast(`Pipeline upload trigger failed: ${e?.message || 'Server error'}`, 'error');
+      }
+    })();
   };
 
   const handlePromoteFromDraft = (id: string) => {
@@ -936,6 +1137,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
           logs: [{ date: new Date().toISOString(), note: 'Created via Email flow.', user: 'System' }],
           attachments: [], version: 1,
           isDraft: false,
+          accountId: (accountId || '').trim() || undefined,
+          ownerLabel: (displayName || '').trim() || (accountId || '').trim() || undefined,
         };
         persistQuotes([newQuote, ...savedQuotes]);
         setItems([]); setUploadedFiles([]); setCustomer(INITIAL_CUSTOMER);
@@ -947,16 +1150,24 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     }
   };
 
-  const handlePersistPdf = useCallback(async (pdfBlob: Blob, fileName: string) => {
-    try {
-      latestDesignedPdfRef.current = { blob: pdfBlob, fileName, at: Date.now() };
-      await uploadQuotationFile(pdfBlob, fileName);
-      showToast('Quotation PDF uploaded to server storage.', 'success');
-    } catch (e: any) {
-      showToast(`PDF upload failed: ${e?.message || 'Server upload error'}`, 'error');
-      throw e;
-    }
-  }, []);
+  const handlePersistPdf = useCallback(
+    async (pdfBlob: Blob, fileName: string) => {
+      try {
+        latestDesignedPdfRef.current = {
+          blob: pdfBlob,
+          fileName,
+          at: Date.now(),
+          contentKey: quotationPdfContentKey,
+        };
+        await uploadQuotationFile(pdfBlob, fileName);
+        showToast('Quotation PDF uploaded to server storage.', 'success');
+      } catch (e: any) {
+        showToast(`PDF upload failed: ${e?.message || 'Server upload error'}`, 'error');
+        throw e;
+      }
+    },
+    [quotationPdfContentKey],
+  );
 
   const subtotal = useMemo(() => items.reduce((sum, i) => sum + i.price * i.quantity, 0), [items]);
   const laborCost = useMemo(() => customer.hasLabor ? (customer.laborCost || 0) : 0, [customer.hasLabor, customer.laborCost]);
@@ -977,11 +1188,26 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   // The grand total is the Net amount plus VAT (if enabled)
   const grandTotal = useMemo(() => showVat ? netTotal + vatAmount : netTotal, [showVat, netTotal, vatAmount]);
 
-  const pipelineQuotes = useMemo(() => savedQuotes, [savedQuotes]);
+  /** Sales users only see quotations tagged with their Account_ID; admins see all. */
+  const pipelineQuotes = useMemo(() => {
+    if (userRole === 'ADMIN') return savedQuotes;
+    const aid = (accountId || '').trim();
+    if (!aid) return [];
+    return savedQuotes.filter((q) => q.accountId === aid);
+  }, [savedQuotes, userRole, accountId]);
+
+  const salesAccountTag = useMemo(() => {
+    const aid = (accountId || '').trim();
+    if (!aid) return undefined;
+    const name = (displayName || '').trim();
+    return name
+      ? `Prepared by: ${name} · Account ID: ${aid}`
+      : `Account ID: ${aid}`;
+  }, [accountId, displayName]);
 
   const recentQuotationHistory = useMemo(() => {
     const entries: { quoteId: string; note: string; date: string; user: string }[] = [];
-    for (const q of savedQuotes) {
+    for (const q of pipelineQuotes) {
       for (const log of q.logs) {
         entries.push({ quoteId: q.id, note: log.note, date: log.date, user: log.user });
       }
@@ -989,7 +1215,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     return entries
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .slice(0, 12);
-  }, [savedQuotes]);
+  }, [pipelineQuotes]);
 
   return (
     <div className="flex h-screen bg-[#F8F9FA] font-sans overflow-hidden text-slate-900">
@@ -1098,14 +1324,19 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
               <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800">
                 {userRole === 'ADMIN' ? 'SA' : 'SE'}
               </div>
-              <div>
-                <p className="text-xs font-bold text-white">
-                  {userRole === 'ADMIN' ? 'System Admin' : 'Sales Employee'}
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-white truncate">
+                  {(displayName || '').trim() || (userRole === 'ADMIN' ? 'System Admin' : 'Sales Employee')}
                 </p>
                 <p className="text-[9px] text-emerald-400 font-bold tracking-wider uppercase flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
                   Signed In
                 </p>
+                {(accountId || '').trim() && (
+                  <p className="text-[9px] text-slate-500 font-mono truncate mt-1" title={accountId}>
+                    ID: {accountId}
+                  </p>
+                )}
               </div>
             </div>
             <button onClick={onLogout} className="p-2 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-all">
@@ -1494,6 +1725,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                   <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-500 border-y border-slate-100">
                     <tr>
                       <th className="px-6 py-4 first:rounded-l-xl">Quote ID</th>
+                      {userRole === 'ADMIN' && (
+                        <th className="px-6 py-4">Sales account</th>
+                      )}
                       <th className="px-6 py-4">Recipient</th>
                       <th className="px-6 py-4">Project</th>
                       <th className="px-6 py-4">Total Value</th>
@@ -1503,10 +1737,25 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                   </thead>
                   <tbody className="divide-y divide-slate-50">
                     {pipelineQuotes.length === 0 ? (
-                      <tr><td colSpan={6} className="text-center py-16 text-slate-400 text-sm font-medium">No quotations found in pipeline.</td></tr>
+                      <tr>
+                        <td
+                          colSpan={userRole === 'ADMIN' ? 7 : 6}
+                          className="text-center py-16 text-slate-400 text-sm font-medium"
+                        >
+                          {userRole !== 'ADMIN' && savedQuotes.length > 0
+                            ? 'No quotations for your account. Quotes from other sales users are hidden.'
+                            : 'No quotations found in pipeline.'}
+                        </td>
+                      </tr>
                     ) : pipelineQuotes.filter(q => (pipelineStatusFilter === 'ALL' || q.status === pipelineStatusFilter) && (q.id.toLowerCase().includes(pipelineSearch.toLowerCase()) || q.customer.fullName.toLowerCase().includes(pipelineSearch.toLowerCase()))).map(q => (
                       <tr key={q.id} className="hover:bg-slate-50 cursor-pointer transition-colors group" onClick={() => setSelectedQuoteId(q.id)}>
                         <td className="px-6 py-5"><span className="font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg text-xs">{q.id}</span></td>
+                        {userRole === 'ADMIN' && (
+                          <td className="px-6 py-5 text-xs">
+                            <div className="font-semibold text-slate-800">{q.ownerLabel || '—'}</div>
+                            <div className="text-[10px] text-slate-500 font-mono mt-0.5">{q.accountId || '—'}</div>
+                          </td>
+                        )}
                         <td className="px-6 py-5">
                           <div className="font-bold text-slate-900 text-sm">{q.customer.fullName}</div>
                           <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mt-0.5">{q.customer.companyName}</div>
@@ -1617,6 +1866,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
         template={pdfTemplate}
         customFileName={pdfFileName}
         onCustomFileNameChange={setPdfFileName}
+        salesAccountTag={salesAccountTag}
       />
       <PreviewModal
         headless
@@ -1639,6 +1889,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
         template={pdfTemplate}
         customFileName={pdfFileName || `Quotation_${previewId}`}
         onCustomFileNameChange={() => {}}
+        salesAccountTag={salesAccountTag}
       />
       {selectedQuoteId && (
         <PipelineDetail

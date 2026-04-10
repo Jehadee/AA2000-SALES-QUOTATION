@@ -3,8 +3,11 @@ import React, { useState } from 'react';
 import { UserRole } from '../types';
 
 interface Props {
-  onLogin: (role: UserRole) => void;
+  onLogin: (role: UserRole, profile: { accountId: string; displayName: string }) => void;
 }
+
+const ADMIN_USER = 'admin';
+const ADMIN_PASS = 'admin123';
 
 const Login: React.FC<Props> = ({ onLogin }) => {
   const [username, setUsername] = useState('');
@@ -12,101 +15,141 @@ const Login: React.FC<Props> = ({ onLogin }) => {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError('');
 
-    // Simulate network delay
-    setTimeout(() => {
-      if (username === 'admin' && password === 'admin123') {
-        onLogin('ADMIN');
-      } else if (username === 'sales' && password === 'sales123') {
-        onLogin('SALES');
-      } else {
-        setError('Invalid credentials. Use admin/admin123 or sales/sales123');
-        setIsLoading(false);
-      }
-    }, 800);
+    const u = username.trim().toLowerCase();
+    const p = password;
+
+    await new Promise((r) => setTimeout(r, 350));
+
+    if (u === ADMIN_USER && p === ADMIN_PASS) {
+      onLogin('ADMIN', {
+        accountId: '1',
+        displayName: 'Administrator',
+      });
+      return;
+    }
+
+    setError('Invalid username or password.');
+    setIsLoading(false);
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 relative overflow-hidden">
-      {/* Decorative Background Elements */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-indigo-600/20 rounded-full blur-[120px]" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600/20 rounded-full blur-[120px]" />
+    <div className="min-h-screen flex items-center justify-center p-6 sm:p-8 bg-[#070b14] relative overflow-hidden">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-[0.35]"
+        style={{
+          background:
+            'radial-gradient(ellipse 80% 55% at 20% -10%, rgba(59, 130, 246, 0.22), transparent 55%), radial-gradient(ellipse 60% 50% at 95% 80%, rgba(99, 102, 241, 0.18), transparent 50%)',
+        }}
+      />
+      <div className="pointer-events-none absolute inset-0 bg-[url('data:image/svg+xml,%3Csvg width=\'60\' height=\'60\' viewBox=\'0 0 60 60\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cg fill=\'none\' fill-rule=\'evenodd\'%3E%3Cg fill=\'%23ffffff\' fill-opacity=\'0.028\'%3E%3Cpath d=\'M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z\'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E')]" />
 
-      <div className="w-full max-w-md relative z-10">
-        <div className="bg-white/5 backdrop-blur-xl border border-white/10 p-8 rounded-[2.5rem] shadow-2xl">
-          <div className="text-center mb-8">
-            <div className="mb-6 flex flex-col items-center">
-              <svg width="100" height="100" viewBox="0 0 120 120" className="drop-shadow-2xl">
-                <circle cx="60" cy="60" r="30" fill="#3b82f6" opacity="0.2" />
-                <path d="M40 25 A45 45 0 0 1 105 60" fill="none" stroke="#2563eb" strokeWidth="4" strokeLinecap="round" />
-                <path d="M15 60 A45 45 0 0 0 80 105" fill="none" stroke="#2563eb" strokeWidth="4" strokeLinecap="round" />
-                <circle cx="60" cy="60" r="28" fill="#1e40af" />
-                <circle cx="60" cy="60" r="20" fill="#3b82f6" />
-                <circle cx="52" cy="52" r="6" fill="white" opacity="0.4" />
-                <line x1="20" y1="70" x2="40" y2="50" stroke="#2563eb" strokeWidth="2" opacity="0.5" />
-              </svg>
-              <h2 className="text-4xl font-black text-white tracking-tighter mt-4 italic uppercase">AA2000</h2>
-              <p className="text-[9px] text-blue-400 font-bold uppercase tracking-[0.15em] mt-1">Security and Technology Solutions Inc.</p>
+      <div className="w-full max-w-[420px] relative z-10">
+        <div className="rounded-3xl border border-white/[0.08] bg-white/[0.04] backdrop-blur-xl shadow-[0_24px_80px_-12px_rgba(0,0,0,0.5)] px-8 py-10 sm:px-10 sm:py-11">
+          <header className="text-center mb-9">
+            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg shadow-blue-950/40">
+              <span className="text-lg font-black tracking-tight text-white">AA</span>
             </div>
-            <h1 className="text-xl font-bold text-white mb-2">Internal Access</h1>
-            <p className="text-slate-400 text-sm">Sign in to the AA2000 Quotation Engine</p>
-          </div>
+            <h1 className="text-[1.65rem] font-bold tracking-tight text-white sm:text-[1.75rem]">AA2000</h1>
+            <p className="mt-1.5 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+              Security &amp; Technology Solutions
+            </p>
+            <div className="mx-auto mt-8 h-px w-12 bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+            <h2 className="mt-7 text-lg font-semibold text-white">Sales quotation</h2>
+            <p className="mt-2 max-w-[280px] mx-auto text-sm leading-relaxed text-slate-400">
+              Sign in with your username and password.
+            </p>
+          </header>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div>
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 ml-1">Username</label>
-              <input 
-                type="text" 
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div className="space-y-2">
+              <label htmlFor="login-username" className="block text-sm font-medium text-slate-300">
+                Username
+              </label>
+              <input
+                id="login-username"
+                type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 transition-all"
-                placeholder="admin"
+                className="w-full rounded-xl border border-white/[0.1] bg-[#0c1220] px-4 py-3.5 text-[15px] text-white placeholder:text-slate-600 shadow-inner outline-none transition-colors focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20"
+                placeholder="Enter username"
+                autoComplete="username"
                 required
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 ml-1">Password</label>
-              <input 
-                type="password" 
+            <div className="space-y-2">
+              <label htmlFor="login-password" className="block text-sm font-medium text-slate-300">
+                Password
+              </label>
+              <input
+                id="login-password"
+                type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 transition-all"
-                placeholder="••••••••"
+                className="w-full rounded-xl border border-white/[0.1] bg-[#0c1220] px-4 py-3.5 text-[15px] text-white placeholder:text-slate-600 shadow-inner outline-none transition-colors focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20"
+                placeholder="Enter password"
+                autoComplete="current-password"
                 required
               />
             </div>
 
             {error && (
-              <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-xs p-3 rounded-lg flex items-center gap-2 animate-shake">
-                <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                {error}
+              <div
+                role="alert"
+                className="flex gap-3 rounded-xl border border-red-500/25 bg-red-950/40 px-4 py-3 text-sm text-red-200"
+              >
+                <svg
+                  className="mt-0.5 h-5 w-5 shrink-0 text-red-400/90"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  aria-hidden
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                  />
+                </svg>
+                <p className="min-w-0 leading-snug">{error}</p>
               </div>
             )}
 
-            <button 
-              type="submit" 
+            <button
+              type="submit"
               disabled={isLoading}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-600/50 disabled:cursor-not-allowed text-white font-bold py-4 rounded-2xl transition-all shadow-lg shadow-indigo-600/20 flex items-center justify-center gap-2"
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 py-3.5 text-[15px] font-semibold text-white shadow-lg shadow-indigo-950/50 transition-all hover:from-blue-500 hover:to-indigo-500 disabled:cursor-not-allowed disabled:opacity-55"
             >
               {isLoading ? (
-                <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                <>
+                  <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" aria-hidden>
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path
+                      className="opacity-80"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    />
+                  </svg>
+                  Signing in…
+                </>
               ) : (
-                'System Login'
+                'Sign in'
               )}
             </button>
           </form>
 
-          <div className="mt-8 pt-8 border-t border-white/10 text-center">
-            <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">
-              Standard Operation Environment v3.1
-            </p>
-          </div>
+          <p className="mt-8 text-center text-xs text-slate-500">
+            <span className="text-slate-600">Need help?</span> Contact IT.
+          </p>
         </div>
+
+        <p className="mt-8 text-center text-[11px] text-slate-600">© AA2000 · Internal use</p>
       </div>
     </div>
   );

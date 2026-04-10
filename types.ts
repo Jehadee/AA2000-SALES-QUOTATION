@@ -132,6 +132,12 @@ export interface QuotationRecord {
   version: number;
   /** When true, quote lives in Draft Inbox until promoted to the main pipeline. */
   isDraft?: boolean;
+  /** Logged-in sales account id (matches backend `Account_ID`). Used to isolate pipeline rows per user. */
+  accountId?: string;
+  /** Friendly name for the same account (e.g. "Grace"). */
+  ownerLabel?: string;
+  /** Backend project row id after `save/quotation`, if returned. */
+  serverProjId?: string | number;
 }
 
 export interface PDFTemplate {

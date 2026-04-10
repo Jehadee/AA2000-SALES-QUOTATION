@@ -515,18 +515,19 @@ const PreviewModal: React.FC<Props> = ({
               <div className="grid grid-cols-2 gap-12 mb-10 items-end">
                 <div className="relative text-center">
                   <p className="text-[8pt] font-black mb-1 uppercase text-slate-900 text-left">Prepared By:</p>
-                  <div className="border-b border-black pb-1 relative min-h-[60px] flex flex-col justify-end">
-                    {/* E-Signature Overlay */}
+                  <div className="border-b border-black pb-1 relative min-h-[76px] isolate">
+                    {/* E-signature: top band, behind name/title */}
                     {template.signatories.preparedBy.signatureUrl && (
-                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0 opacity-90">
-                        <img 
-                          src={template.signatories.preparedBy.signatureUrl} 
-                          alt="Signature" 
-                          className="max-h-24 object-contain mb-4"
+                      <div className="absolute left-0 right-0 top-0 flex justify-center pointer-events-none z-[1] pt-0.5">
+                        <img
+                          src={template.signatories.preparedBy.signatureUrl}
+                          alt=""
+                          className="max-h-[48px] w-auto object-contain opacity-90"
+                          aria-hidden
                         />
                       </div>
                     )}
-                    <div className="relative z-10">
+                    <div className="relative z-[2] pt-14">
                       <p className="text-[11pt] font-bold text-slate-900 leading-tight">{template.signatories.preparedBy.name}</p>
                       <p className="text-[9pt] font-medium italic text-slate-800 leading-tight">{template.signatories.preparedBy.position}</p>
                     </div>

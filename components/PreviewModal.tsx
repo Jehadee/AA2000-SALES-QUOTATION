@@ -25,11 +25,13 @@ interface Props {
   onCustomFileNameChange: (name: string) => void;
   headless?: boolean;
   printRefOverride?: React.RefObject<HTMLDivElement | null>;
+  /** Shown on PDF (e.g. prepared-by line tied to logged-in sales account). */
+  salesAccountTag?: string;
 }
 
 const PreviewModal: React.FC<Props> = ({ 
   isOpen, onClose, items, customer, paymentMethod, subtotal, laborCost = 0, vat, discountAmount, discountValue = 0, discountType = 'percentage', total, showVat, onSendEmail, existingQuoteId, template,
-  customFileName, onCustomFileNameChange, onPersistPdf, headless = false, printRefOverride
+  customFileName, onCustomFileNameChange, onPersistPdf, headless = false, printRefOverride, salesAccountTag
 }) => {
   const printRef = useRef<HTMLDivElement>(null);
   const effectivePrintRef = printRefOverride ?? printRef;
@@ -148,6 +150,9 @@ const PreviewModal: React.FC<Props> = ({
           <div className="text-center sm:text-left">
             <h2 className="text-lg sm:text-xl font-black text-slate-900 uppercase tracking-tight">Document Preview</h2>
             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{quotationNo}</p>
+            {salesAccountTag && (
+              <p className="text-[9px] text-slate-500 font-semibold mt-0.5">{salesAccountTag}</p>
+            )}
           </div>
 
           <div className="flex-1 max-w-xs mx-4 hidden md:block">
@@ -274,6 +279,11 @@ const PreviewModal: React.FC<Props> = ({
                 <div className="text-center">REF: <span className="text-slate-900">{quotationNo}</span></div>
                 <div className="text-right">DATE: <span className="text-slate-900">{today.toUpperCase()}</span></div>
               </div>
+              {salesAccountTag && (
+                <div className="text-[7pt] font-bold text-slate-800 mb-3 normal-case tracking-normal">
+                  {salesAccountTag}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-x-12 gap-y-1.5 text-[7.5pt] mb-6 border border-black p-2">
                 <div className="grid grid-cols-[100px_1fr] gap-2">

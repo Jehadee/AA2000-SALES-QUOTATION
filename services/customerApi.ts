@@ -143,6 +143,27 @@ function getFnameMnameLname(customer: CustomerInfo): { fname: string; mname: str
   return { fname: parts[0], mname: parts.slice(1, -1).join(' '), lname: parts[parts.length - 1] };
 }
 
+/** Best-effort id from POST /customers/add/customer (shape varies by deployment). */
+export function extractCustomerIdFromAddResponse(data: unknown): string | undefined {
+  if (data == null || typeof data !== 'object') return undefined;
+  const o = data as Record<string, unknown>;
+  const nested = o.data && typeof o.data === 'object' ? (o.data as Record<string, unknown>) : undefined;
+  const candidates = [
+    o.cus_ID,
+    o.customerID,
+    o.Customer_ID,
+    o.id,
+    nested?.cus_ID,
+    nested?.customerID,
+    nested?.Customer_ID,
+    nested?.id,
+  ];
+  for (const v of candidates) {
+    if (v != null && v !== '') return String(v);
+  }
+  return undefined;
+}
+
 export async function addCustomer(customer: CustomerInfo): Promise<AddCustomerResponse> {
   const url = getAddCustomerUrl();
   const { fname, mname, lname } = getFnameMnameLname(customer);

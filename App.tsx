@@ -938,7 +938,6 @@ const App: React.FC = () => {
       </div>
     );
   }
-
   return (
     <Dashboard
       onLogout={handleLogout}

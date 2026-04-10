@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, PanelLeftClose, PanelLeft, User } from 'lucide-react';
+import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, PanelLeftClose, PanelLeft } from 'lucide-react';
 import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile, SessionUserProfile } from '../types';
 import { PRODUCTS, COMPANY_DETAILS, DEFAULT_PDF_TEMPLATE, INITIAL_CUSTOMER } from '../constants';
 import { processConversation } from '../services/geminiService';
@@ -95,13 +95,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   const latestDesignedPdfRef = useRef<{ blob: Blob; fileName: string; at: number } | null>(null);
   const submitPipelinePrintRef = useRef<HTMLDivElement>(null);
 
-  const canAccessTab = useCallback(
-    (tab: DashboardTab): boolean => {
-      if (tab === 'admin') return userRole === 'ADMIN';
-      return true;
-    },
-    [userRole]
-  );
+  const canAccessTab = useCallback((_tab: DashboardTab): boolean => true, []);
 
   const requestTabChange = useCallback(
     (tab: DashboardTab) => {
@@ -1123,32 +1117,17 @@ const Dashboard: React.FC<DashboardProps> = ({
                 </button>
 
                 <button
-                  onClick={() => requestTabChange('profile')}
-                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'profile' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
+                  onClick={() => requestTabChange('admin')}
+                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'admin' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                 >
-                  <div className={`p-2 rounded-lg transition-colors ${activeTab === 'profile' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
-                    <User size={18} />
+                  <div className={`p-2 rounded-lg transition-colors ${activeTab === 'admin' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
+                    <Settings size={18} />
                   </div>
                   <div className="text-left">
-                    <span className="block font-bold">Profile</span>
-                    <span className="block text-[10px] opacity-60 font-normal mt-0.5">SESSION & ACCOUNT</span>
+                    <span className="block font-bold">Admin Console</span>
+                    <span className="block text-[10px] opacity-60 font-normal mt-0.5">CATALOG & SYSTEM</span>
                   </div>
                 </button>
-
-                {userRole === 'ADMIN' && (
-                  <button
-                    onClick={() => requestTabChange('admin')}
-                    className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'admin' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
-                  >
-                    <div className={`p-2 rounded-lg transition-colors ${activeTab === 'admin' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
-                      <Settings size={18} />
-                    </div>
-                    <div className="text-left">
-                      <span className="block font-bold">Admin Console</span>
-                      <span className="block text-[10px] opacity-60 font-normal mt-0.5">CATALOG & SYSTEM</span>
-                    </div>
-                  </button>
-                )}
               </nav>
             </div>
           </div>
@@ -1156,20 +1135,25 @@ const Dashboard: React.FC<DashboardProps> = ({
 
         <div className="mt-auto p-6 border-t border-slate-800/50">
           <div className="flex items-center justify-between group">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800">
+            <button
+              type="button"
+              onClick={() => requestTabChange('profile')}
+              className="flex items-center gap-3 text-left rounded-xl -m-1 p-1 pr-2 hover:bg-slate-800/70 transition-colors flex-1 min-w-0"
+              title="Open profile"
+            >
+              <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800 shrink-0">
                 {sessionProfile?.initials ?? (userRole === 'ADMIN' ? 'SA' : 'SE')}
               </div>
-              <div>
-                <p className="text-xs font-bold text-white">
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-white truncate">
                   {sessionProfile?.displayName ?? (userRole === 'ADMIN' ? 'System Admin' : 'Sales Employee')}
                 </p>
                 <p className="text-[9px] text-emerald-400 font-bold tracking-wider uppercase flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
                   Signed In
                 </p>
               </div>
-            </div>
+            </button>
             <button onClick={onLogout} className="p-2 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-all">
               <LogOut size={18} />
             </button>

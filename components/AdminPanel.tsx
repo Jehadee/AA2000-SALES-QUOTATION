@@ -1189,19 +1189,20 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                 <div className="grid grid-cols-2 gap-12 pt-10 items-end">
                   <div className="relative group/sig text-center">
                     <p className="text-[8pt] font-black mb-1 uppercase text-slate-900 text-left">Prepared By:</p>
-                    <div className="border-b border-black pb-1 relative min-h-[60px] flex flex-col justify-end">
-                      {/* E-Signature Overlay */}
+                    <div className="border-b border-black pb-1 relative min-h-[76px] isolate">
+                      {/* E-signature: top band, behind name/title */}
                       {pdfTemplate.signatories.preparedBy.signatureUrl && (
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0 opacity-80">
-                          <img 
-                            src={pdfTemplate.signatories.preparedBy.signatureUrl} 
-                            alt="Signature" 
-                            className="max-h-24 object-contain mb-4"
+                        <div className="absolute left-0 right-0 top-0 flex justify-center pointer-events-none z-[1] pt-0.5">
+                          <img
+                            src={pdfTemplate.signatories.preparedBy.signatureUrl}
+                            alt=""
+                            className="max-h-[48px] w-auto object-contain opacity-90"
+                            aria-hidden
                           />
                         </div>
                       )}
-                      
-                      <div className="relative z-10">
+
+                      <div className="relative z-[2] pt-14">
                         <input type="text" value={pdfTemplate.signatories.preparedBy.name} onChange={(e) => handleUpdateTemplateField('signatories.preparedBy.name', e.target.value)} className="w-full bg-transparent border-none outline-none text-[11pt] font-bold text-slate-900 text-center p-0" />
                         <input type="text" value={pdfTemplate.signatories.preparedBy.position} onChange={(e) => handleUpdateTemplateField('signatories.preparedBy.position', e.target.value)} className="w-full bg-transparent border-none outline-none text-[9pt] font-medium italic text-slate-800 text-center p-0" />
                       </div>

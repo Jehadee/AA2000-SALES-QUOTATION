@@ -121,6 +121,8 @@ export async function fetchEstimationFiles(): Promise<EstimationFileRecord[]> {
   );
 
   let lastStatus: number | null = null;
+  let saw404 = false;
+  let sawNon404Error = false;
   let data: any = null;
   let usedPath = '';
   let lastNonJsonBody: string | null = null;
@@ -144,10 +146,17 @@ export async function fetchEstimationFiles(): Promise<EstimationFileRecord[]> {
       }
     } else {
       lastStatus = res.status;
+      if (res.status === 404) saw404 = true;
+      else sawNon404Error = true;
     }
   }
   
   if (!data) {
+    // Some backends return 404 when estimation storage is empty/missing.
+    // Treat this as an empty inbox instead of a hard failure.
+    if (saw404 && !sawNon404Error && !lastNonJsonUrl) {
+      return [];
+    }
     throw new Error(
       `Failed to fetch estimation files JSON. Tried: ${candidates.join(', ')}${
         lastStatus ? ` (last status ${lastStatus})` : ''

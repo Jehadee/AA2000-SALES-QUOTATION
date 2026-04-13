@@ -2,6 +2,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { SelectedItem, CustomerInfo, PaymentMethod, ClientType, PDFTemplate } from '../types';
 import { generateQuotationPDF } from '../services/pdfService';
+import { TermsRichText } from '../utils/termsRichText';
 
 interface Props {
   isOpen: boolean;
@@ -458,16 +459,23 @@ const PreviewModal: React.FC<Props> = ({
 
             {/* PDF-FOOTER SECTION */}
             <div className="pdf-footer px-[12mm] py-8 bg-white shrink-0">
-              <div className="border border-black mb-5">
-                <div className="bg-[#003366] text-white text-center font-bold text-[9pt] border-b border-black py-1.5 uppercase tracking-widest">TERMS AND CONDITIONS</div>
-                <div className="p-3 space-y-1.5">
-                  {template.termsAndConditions.map((term, idx) => (
-                    <div key={idx} className="grid grid-cols-[24px_1fr] gap-1 text-[7.2pt] font-bold uppercase text-slate-800 leading-[1.45]">
-                      <span className="text-center shrink-0 leading-[1.45]">{term.key}</span>
-                      <span className="whitespace-pre-wrap break-words leading-[1.45]">{term.value}</span>
-                    </div>
-                  ))}
+              <div className="border border-black mb-5 overflow-hidden font-sans text-neutral-900">
+                <div className="bg-[#C5D4E0] text-center font-bold text-[9pt] border-b border-black py-2 uppercase tracking-wide text-neutral-900">
+                  TERMS AND CONDITIONS
                 </div>
+                {template.termsAndConditions.map((term, idx) => (
+                  <div
+                    key={idx}
+                    className="grid grid-cols-[32px_1fr] border-b border-black last:border-b-0 text-[7.2pt] leading-[1.5] text-neutral-900"
+                  >
+                    <div className="border-r border-black flex items-start justify-center font-bold pt-2 pb-2 shrink-0">
+                      {term.key}
+                    </div>
+                    <div className="px-2.5 py-2 text-left normal-case font-normal whitespace-pre-wrap break-words antialiased">
+                      <TermsRichText text={term.value} />
+                    </div>
+                  </div>
+                ))}
               </div>
 
               <div className="border border-black mb-6">

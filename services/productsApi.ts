@@ -1,4 +1,5 @@
 import type { Product } from '../types';
+import { getNormalizedApiBaseUrl } from './apiBaseUrl';
 import { deriveTierPricesFromBasePrice } from './pricing';
 
 /** Backend product shape (from Sequelize Product model) */
@@ -116,7 +117,7 @@ function extractSupplierIdFromApiRow(row: Record<string, unknown>): number | nul
 }
 
 function getSuppliersUrl(): string {
-  const base = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? '';
+  const base = getNormalizedApiBaseUrl();
   const pathOverride = (import.meta as any).env?.VITE_SUPPLIERS_PATH as string | undefined;
   const baseClean = base.replace(/\/+$/, '');
   if (pathOverride != null && pathOverride.trim() !== '') {
@@ -164,7 +165,7 @@ function parseSupplierRowsToMap(list: unknown[]): Map<number, string> {
 /** Load supplier id → display name from the API (database). */
 async function fetchSupplierMap(): Promise<Map<number, string>> {
   const primary = getSuppliersUrl();
-  const base = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? '';
+  const base = getNormalizedApiBaseUrl();
   const baseClean = base.replace(/\/+$/, '');
   const fallback = `${baseClean}/products/get/suppliers`;
 
@@ -188,7 +189,7 @@ async function fetchSupplierMap(): Promise<Map<number, string>> {
 }
 
 function getProductsUrl(): string {
-  const base = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? '';
+  const base = getNormalizedApiBaseUrl();
   const pathOverride = (import.meta as any).env?.VITE_PRODUCTS_PATH as string | undefined;
   const baseClean = base.replace(/\/+$/, '');
   if (pathOverride != null && pathOverride.trim() !== '') {

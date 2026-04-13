@@ -1,3 +1,5 @@
+import { getNormalizedApiBaseUrl } from './apiBaseUrl';
+
 export interface EstimationFileRecord {
   filename: string;
   fileUrl: string;
@@ -50,8 +52,7 @@ export function canOfficeOnlinePreview(fileUrl: string): boolean {
 }
 
 function getBaseUrl(): string {
-  const base = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? '';
-  return base.replace(/\/+$/, '');
+  return getNormalizedApiBaseUrl();
 }
 
 function getApiBasePath(): string {
@@ -63,15 +64,15 @@ function getApiBasePath(): string {
 function getListPath(): string {
   const override = (import.meta as any).env?.VITE_ESTIMATION_LIST_PATH as string | undefined;
   if (override && override.trim()) return override.trim();
-  // Default assumes router is mounted under /products.
-  return '/service/quotation/list/estimationFiles';
+  // Default: GET .../list/estimationFiles
+  return '/service/quotation/get/list/estimationFiles';
 }
 
 function getFilePathTemplate(): string {
   const override = (import.meta as any).env?.VITE_ESTIMATION_FILE_PATH_TEMPLATE as string | undefined;
   if (override && override.trim()) return override.trim();
-  // Use "{filename}" token for interpolation.
-  return '/service/quotation/get/estimationFile/{filename}';
+  // Default: GET .../get/estimationFile/:filename (note nested "get" under /service/quotation/get/)
+  return '/service/quotation/get/get/estimationFile/{filename}';
 }
 
 function buildAbsoluteUrl(pathOrUrl: string): string {
@@ -87,10 +88,37 @@ function buildFileUrl(filename: string): string {
   // force it to use the proper get endpoint to avoid malformed URLs like
   // /service/quotation/list/estimationFiles<filename>.
   if (/\/list\/estimationFiles/i.test(tpl)) {
-    tpl = tpl.replace(/\/list\/estimationFiles(?:\{filename\})?/i, '/get/estimationFile/{filename}');
+    const replacement = /service\/quotation\/get\//i.test(tpl)
+      ? '/get/get/estimationFile/{filename}'
+      : '/get/estimationFile/{filename}';
+    tpl = tpl.replace(/\/list\/estimationFiles(?:\{filename\})?/i, replacement);
   }
   const encoded = encodeURIComponent(filename);
   const path = tpl.includes('{filename}') ? tpl.replace('{filename}', encoded) : `${tpl.replace(/\/+$/, '')}/${encoded}`;
+  return buildAbsoluteUrl(path);
+}
+
+/** DOCX → HTML preview route; matches .../preview/estimationFile/:filename next to the get route. */
+function buildDocxServerPreviewUrl(fileUrl: string, filename: string): string {
+  if (/\/get\/estimationFile\//i.test(fileUrl)) {
+    return fileUrl.replace(/\/get\/estimationFile\//i, '/preview/estimationFile/');
+  }
+  const enc = encodeURIComponent(filename);
+  const override = (import.meta as any).env?.VITE_ESTIMATION_PREVIEW_PATH_TEMPLATE as string | undefined;
+  if (override && override.trim()) {
+    const tpl = override.trim();
+    const path = tpl.includes('{filename}') ? tpl.replace('{filename}', enc) : `${tpl.replace(/\/+$/, '')}/${enc}`;
+    return buildAbsoluteUrl(path);
+  }
+  let prevTpl = getFilePathTemplate();
+  if (/get\/get\/estimationFile/i.test(prevTpl)) {
+    prevTpl = prevTpl.replace(/get\/get\/estimationFile/i, 'get/preview/estimationFile');
+  } else {
+    prevTpl = prevTpl.replace(/\/get\/estimationFile/i, '/preview/estimationFile');
+  }
+  const path = prevTpl.includes('{filename}')
+    ? prevTpl.replace('{filename}', enc)
+    : `${prevTpl.replace(/\/+$/, '')}/${enc}`;
   return buildAbsoluteUrl(path);
 }
 
@@ -107,15 +135,25 @@ export async function fetchEstimationFiles(): Promise<EstimationFileRecord[]> {
 
   const configured = getListPath();
   const apiBasePath = getApiBasePath();
+  const listSuffix = '/list/estimationFiles';
+  const serviceQuotationList = '/service/quotation/get/list/estimationFiles';
   const candidates = Array.from(
     new Set(
       [
         configured,
-        `${apiBasePath}${configured.startsWith('/') ? configured : `/${configured}`}`,
+        ...(apiBasePath
+          ? [
+              `${apiBasePath}${serviceQuotationList}`.replace(/\/{2,}/g, '/'),
+              `${apiBasePath}${listSuffix}`.replace(/\/{2,}/g, '/'),
+            ]
+          : []),
+        `${apiBasePath}${configured.startsWith('/') ? configured : `/${configured}`}`.replace(/\/{2,}/g, '/'),
+        serviceQuotationList,
         '/products/list/estimationFiles',
         '/api/products/list/estimationFiles',
-        '/list/estimationFiles',
+        listSuffix,
         '/api/list/estimationFiles',
+        '/service/quotation/list/estimationFiles',
       ].map((p) => p.replace(/\/{2,}/g, '/'))
     )
   );
@@ -179,10 +217,12 @@ export async function fetchEstimationFiles(): Promise<EstimationFileRecord[]> {
           : (f as any)?.createdAt
             ? String((f as any).createdAt)
             : undefined;
-      const extensionMatch = filename.match(/\.([a-z0-9]+)$/i);
+      const basename = filename.split(/[?#]/)[0] ?? filename;
+      const extensionMatch = basename.match(/\.([a-z0-9]+)$/i);
       const extension = extensionMatch ? extensionMatch[1].toLowerCase() : '';
-      const isPdf = extension === 'pdf';
-      const isDocx = extension === 'docx' || extension === 'doc';
+      const isPdf = extension === 'pdf' || /\.pdf$/i.test(basename);
+      const isDocx =
+        /\.docx$/i.test(basename) || (/\.doc$/i.test(basename) && !/\.docx$/i.test(basename));
       let fileUrl = buildFileUrl(filename);
       if (isApiPrefixed && estimationRoutePrefix && !/^https?:\/\//i.test(fileUrl) && !fileUrl.includes('/api/')) {
         fileUrl = buildAbsoluteUrl(
@@ -190,14 +230,7 @@ export async function fetchEstimationFiles(): Promise<EstimationFileRecord[]> {
         );
       }
 
-      // Prefer your server-side DOCX->PDF preview route whenever we can infer the mount prefix
-      // from the list endpoint we successfully fetched.
-      const serverDocxPreview =
-        isDocx && estimationRoutePrefix
-          ? buildAbsoluteUrl(
-              `${estimationRoutePrefix}/preview/estimationFile/${encodeURIComponent(filename)}`
-            )
-          : '';
+      const serverDocxPreview = isDocx ? buildDocxServerPreviewUrl(fileUrl, filename) : '';
       const useOffice = isDocx && !serverDocxPreview && canOfficeOnlinePreview(fileUrl);
 
       const previewUrl = isPdf

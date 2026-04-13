@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, PanelLeftClose, PanelLeft } from 'lucide-react';
-import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile, SessionUserProfile } from '../types';
+import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile } from '../types';
 import { PRODUCTS, COMPANY_DETAILS, DEFAULT_PDF_TEMPLATE, INITIAL_CUSTOMER } from '../constants';
 import { processConversation } from '../services/geminiService';
 import { db, saveCatalog, savePipeline, saveAdminLogs, saveSettings, getSettings, saveCurrentAppState, getCurrentAppState } from '../services/db';
@@ -29,14 +29,14 @@ import { deriveTierPricesFromBasePrice } from '../services/pricing';
 import * as XLSX from 'xlsx';
 import { fetchAllyOpportunities } from '../services/allyOpportunitiesApi';
 import { fetchEstimationFiles, type EstimationFileRecord } from '../services/estimationApi';
-import ProfileScreen from './ProfileScreen';
+import { upgradeTermsFromLegacy } from '../utils/upgradeTermsFromLegacy';
 
 interface DashboardProps {
   onLogout: () => void;
   userRole: UserRole;
-  sessionProfile: SessionUserProfile | null;
-  onRefreshSessionProfile: () => Promise<void>;
-  isRefreshingProfile: boolean;
+  /** Logged-in user's server Account_ID (pipeline isolation for SALES). */
+  accountId: string;
+  displayName: string;
 }
 
 function sanitizeAccountFileToken(s: string): string {
@@ -81,21 +81,13 @@ function buildQuotationPdfContentKey(params: {
   });
 }
 
-type DashboardTab = 'estimation' | 'quotation' | 'pipeline' | 'profile' | 'admin';
-
 export interface Message {
   role: 'user' | 'model';
   content: string;
   attachments?: { type: string; data: string; name?: string }[];
 }
 
-const Dashboard: React.FC<DashboardProps> = ({
-  onLogout,
-  userRole,
-  sessionProfile,
-  onRefreshSessionProfile,
-  isRefreshingProfile,
-}) => {
+const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole, accountId, displayName }) => {
   const [items, setItems] = useState<SelectedItem[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [laborServices, setLaborServices] = useState<LaborService[]>([]);
@@ -106,11 +98,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [manualDiscountEnabled, setManualDiscountEnabled] = useState<boolean>(true);
   const [showVat, setShowVat] = useState<boolean>(true);
   const [currentStatus, setCurrentStatus] = useState<QuotationStatus>(QuotationStatus.INQUIRY);
-  const [activeTab, setActiveTab] = useState<DashboardTab>('estimation');
-  const [roleWarningModal, setRoleWarningModal] = useState<{ open: boolean; message: string }>({
-    open: false,
-    message: '',
-  });
+  const [activeTab, setActiveTab] = useState<'estimation' | 'quotation' | 'pipeline' | 'admin'>('estimation');
   
   const [messages, setMessages] = useState<Message[]>([
     { role: 'model', content: "Hello! I'm your AA2000 Sales Assistant. I can help you build quotations faster. Just tell me what products you need, or upload a photo of a hand-written BOM or an Excel file!" }
@@ -148,34 +136,6 @@ const Dashboard: React.FC<DashboardProps> = ({
     contentKey: string;
   } | null>(null);
   const submitPipelinePrintRef = useRef<HTMLDivElement>(null);
-  const accountId = String(sessionProfile?.acc_ID ?? '').trim();
-  const displayName = (sessionProfile?.displayName ?? '').trim();
-
-  const canAccessTab = useCallback((_tab: DashboardTab): boolean => true, []);
-
-  const requestTabChange = useCallback(
-    (tab: DashboardTab) => {
-      if (canAccessTab(tab)) {
-        setActiveTab(tab);
-        return;
-      }
-      setRoleWarningModal({
-        open: true,
-        message: 'Access denied: your account role does not have permission to open this screen.',
-      });
-    },
-    [canAccessTab]
-  );
-
-  useEffect(() => {
-    if (!canAccessTab(activeTab)) {
-      setActiveTab('quotation');
-      setRoleWarningModal({
-        open: true,
-        message: 'Your role changed and this screen is restricted. You were redirected to Quotation Studio.',
-      });
-    }
-  }, [activeTab, canAccessTab]);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -215,7 +175,15 @@ const Dashboard: React.FC<DashboardProps> = ({
         if (savedLogs.length > 0) setAdminLogs(savedLogs);
 
         const savedTemplate = await getSettings('pdf_template');
-        if (savedTemplate) setPdfTemplate(savedTemplate);
+        if (savedTemplate) {
+          const merged = upgradeTermsFromLegacy(savedTemplate);
+          setPdfTemplate(merged);
+          const before = JSON.stringify(savedTemplate.termsAndConditions ?? []);
+          const after = JSON.stringify(merged.termsAndConditions ?? []);
+          if (before !== after) {
+            await saveSettings('pdf_template', merged);
+          }
+        }
 
         const savedAppState = await getCurrentAppState();
         if (savedAppState) {
@@ -321,10 +289,9 @@ const Dashboard: React.FC<DashboardProps> = ({
       const files = await fetchEstimationFiles();
       setEstimationFiles(files);
     } catch (e: any) {
-      // Keep inbox usable even when backend routes are unavailable.
-      const msg = 'Estimation inbox is temporarily unavailable. You can continue using Quotation Studio and refresh later.';
+      const msg = e?.message || 'Failed to load estimation files';
       setEstimationError(msg);
-      showToast('Estimation inbox not available right now. You can still proceed with quotation.', 'info');
+      showToast(msg, 'error');
     } finally {
       setIsLoadingEstimations(false);
     }
@@ -381,9 +348,9 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const handleCreateQuotationFromEstimation = useCallback((file: EstimationFileRecord) => {
     setSelectedEstimationFile(file);
-    requestTabChange('quotation');
+    setActiveTab('quotation');
     showToast(`Loaded ${file.filename}. You can draft while viewing the source file.`, 'info');
-  }, [requestTabChange]);
+  }, []);
 
   const getPriceForClient = useCallback((product: Product, clientType: ClientType, volume: number): number => {
     const tier = deriveTierPricesFromBasePrice(product.baseCost || 0);
@@ -955,8 +922,8 @@ const Dashboard: React.FC<DashboardProps> = ({
     setPdfFileName('');
     setPreviewId(resetReference);
     setSelectedQuoteId(null);
-    requestTabChange('pipeline');
-    requestTabChange('pipeline');
+    setActiveTab('pipeline');
+
     const uploadSnapshot = {
       quoteId: newQuote.id,
       customerName: newQuote.customer.fullName || newQuote.customer.companyName,
@@ -970,6 +937,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       pipelineStatus: newQuote.status,
       projectFor: newQuote.customer.projectFor || null,
     };
+
     void saveCurrentAppState({
       id: 'current',
       items: [],
@@ -1302,7 +1270,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Workspaces</p>
               <nav className="space-y-1">
                 <button
-                  onClick={() => requestTabChange('estimation')}
+                  onClick={() => setActiveTab('estimation')}
                   className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'estimation' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                 >
                   <div className={`p-2 rounded-lg transition-colors ${activeTab === 'estimation' ? 'bg-amber-500/10 text-amber-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
@@ -1315,7 +1283,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 </button>
 
                 <button
-                  onClick={() => requestTabChange('quotation')}
+                  onClick={() => setActiveTab('quotation')}
                   className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'quotation' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                 >
                   <div className={`p-2 rounded-lg transition-colors ${activeTab === 'quotation' ? 'bg-cyan-500/10 text-cyan-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
@@ -1328,7 +1296,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 </button>
 
                 <button
-                  onClick={() => requestTabChange('pipeline')}
+                  onClick={() => setActiveTab('pipeline')}
                   className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'pipeline' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                 >
                   <div className={`p-2 rounded-lg transition-colors ${activeTab === 'pipeline' ? 'bg-purple-500/10 text-purple-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
@@ -1340,18 +1308,20 @@ const Dashboard: React.FC<DashboardProps> = ({
                   </div>
                 </button>
 
-                <button
-                  onClick={() => requestTabChange('admin')}
-                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'admin' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
-                >
-                  <div className={`p-2 rounded-lg transition-colors ${activeTab === 'admin' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
-                    <Settings size={18} />
-                  </div>
-                  <div className="text-left">
-                    <span className="block font-bold">Admin Console</span>
-                    <span className="block text-[10px] opacity-60 font-normal mt-0.5">CATALOG & SYSTEM</span>
-                  </div>
-                </button>
+                {userRole === 'ADMIN' && (
+                  <button
+                    onClick={() => setActiveTab('admin')}
+                    className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'admin' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
+                  >
+                    <div className={`p-2 rounded-lg transition-colors ${activeTab === 'admin' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
+                      <Settings size={18} />
+                    </div>
+                    <div className="text-left">
+                      <span className="block font-bold">Admin Console</span>
+                      <span className="block text-[10px] opacity-60 font-normal mt-0.5">CATALOG & SYSTEM</span>
+                    </div>
+                  </button>
+                )}
               </nav>
             </div>
           </div>
@@ -1359,18 +1329,13 @@ const Dashboard: React.FC<DashboardProps> = ({
 
         <div className="mt-auto p-6 border-t border-slate-800/50">
           <div className="flex items-center justify-between group">
-            <button
-              type="button"
-              onClick={() => requestTabChange('profile')}
-              className="flex items-center gap-3 text-left rounded-xl -m-1 p-1 pr-2 hover:bg-slate-800/70 transition-colors flex-1 min-w-0"
-              title="Open profile"
-            >
-              <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800 shrink-0">
-                {sessionProfile?.initials ?? (userRole === 'ADMIN' ? 'SA' : 'SE')}
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800">
+                {userRole === 'ADMIN' ? 'SA' : 'SE'}
               </div>
               <div className="min-w-0">
                 <p className="text-xs font-bold text-white truncate">
-                  {sessionProfile?.displayName ?? (userRole === 'ADMIN' ? 'System Admin' : 'Sales Employee')}
+                  {(displayName || '').trim() || (userRole === 'ADMIN' ? 'System Admin' : 'Sales Employee')}
                 </p>
                 <p className="text-[9px] text-emerald-400 font-bold tracking-wider uppercase flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
@@ -1382,7 +1347,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                   </p>
                 )}
               </div>
-            </button>
+            </div>
             <button onClick={onLogout} className="p-2 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-all">
               <LogOut size={18} />
             </button>
@@ -1413,7 +1378,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Workspace</p>
                   <h2 className="text-2xl font-black text-slate-900">Estimation Inbox</h2>
                   <p className="mt-2 text-sm text-slate-500 max-w-2xl">
-                    Review incoming estimation files, download originals, and start drafting a quotation in one click.
+                    Review incoming estimation PDFs, download originals, and start drafting a quotation in one click.
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
@@ -1432,7 +1397,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               </div>
 
               {estimationError && (
-                <div className="mb-6 bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl px-4 py-3">
+                <div className="mb-6 bg-red-50 border border-red-100 text-red-700 text-sm rounded-xl px-4 py-3">
                   {estimationError}
                 </div>
               )}
@@ -1589,7 +1554,20 @@ const Dashboard: React.FC<DashboardProps> = ({
                           <div className="max-w-md space-y-2">
                             <p className="text-sm font-bold text-slate-800">Preview is not available in the browser</p>
                             <p className="text-xs text-slate-600 leading-relaxed">
-                              Word files are normally shown with Microsoft&apos;s online viewer, which only works when the file address is reachable from the public internet (not local networks or dev tunnels). Open the file in a new tab to view it with your signed-in session.
+                              {selectedEstimationFile.isPdf ? (
+                                <>
+                                  PDFs usually open inside this panel when the server allows embedding. If you only see a blank area, the server may be blocking iframes or your browser blocked mixed content. Use{' '}
+                                  <span className="font-semibold text-slate-800">Open original file</span> above to view the PDF in a new tab with your session.
+                                </>
+                              ) : selectedEstimationFile.isDocx ? (
+                                <>
+                                  Word files are often shown with Microsoft&apos;s online viewer, which only works when the file URL is reachable from the public internet (not all local or tunnel URLs). Open the file in a new tab to view it with your session.
+                                </>
+                              ) : (
+                                <>
+                                  Open the file in a new tab to view it. If this is a PDF, ensure the file name ends with <span className="font-mono">.pdf</span> so the app can pick the right viewer.
+                                </>
+                              )}
                             </p>
                           </div>
                           <a
@@ -1834,30 +1812,6 @@ const Dashboard: React.FC<DashboardProps> = ({
           </div>
         )}
 
-        {activeTab === 'profile' && (
-          <>
-            {sessionProfile ? (
-              <ProfileScreen
-                profile={sessionProfile}
-                isRefreshing={isRefreshingProfile}
-                onRefresh={() => void onRefreshSessionProfile()}
-              />
-            ) : (
-              <div className="p-8 max-w-3xl mx-auto min-h-full flex flex-col items-center justify-center gap-4">
-                <p className="text-sm text-slate-600 font-medium">Loading your profile...</p>
-                <button
-                  type="button"
-                  onClick={() => void onRefreshSessionProfile()}
-                  className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-indigo-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-indigo-500"
-                >
-                  <RefreshCw size={14} className={isRefreshingProfile ? 'animate-spin' : ''} />
-                  Retry
-                </button>
-              </div>
-            )}
-          </>
-        )}
-
         {activeTab === 'admin' && (
           <div className="p-8 max-w-7xl mx-auto">
              <AdminPanel 
@@ -1975,7 +1929,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             setShowVat(q.showVat ?? true);
             setPaymentMethod(q.paymentMethod);
             setPreviewId(q.id);
-            requestTabChange('quotation');
+            setActiveTab('quotation');
             setSelectedQuoteId(null);
           }}
           onPreviewPDF={() => {
@@ -1994,36 +1948,6 @@ const Dashboard: React.FC<DashboardProps> = ({
           }}
           onPromoteFromDraft={handlePromoteFromDraft}
         />
-      )}
-      {roleWarningModal.open && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/70 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white border border-slate-200 shadow-2xl p-6">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest mb-1">Navigation blocked</p>
-                <h3 className="text-lg font-black text-slate-900">Role mismatch</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setRoleWarningModal({ open: false, message: '' })}
-                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100"
-                aria-label="Close role warning"
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <p className="mt-3 text-sm text-slate-600">{roleWarningModal.message}</p>
-            <div className="mt-6 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setRoleWarningModal({ open: false, message: '' })}
-                className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-indigo-500"
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );

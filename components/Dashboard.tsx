@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, PanelLeftClose, PanelLeft, User } from 'lucide-react';
+import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, PanelLeftClose, PanelLeft } from 'lucide-react';
 import {
   Product,
   SelectedItem,
@@ -1334,19 +1334,6 @@ const Dashboard: React.FC<DashboardProps> = ({
                   <div className="text-left">
                     <span className="block font-bold">Pipeline</span>
                     <span className="block text-[10px] opacity-60 font-normal mt-0.5">ACTIVE QUOTATIONS</span>
-                  </div>
-                </button>
-
-                <button
-                  onClick={() => setActiveTab('profile')}
-                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'profile' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
-                >
-                  <div className={`p-2 rounded-lg transition-colors ${activeTab === 'profile' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
-                    <User size={18} />
-                  </div>
-                  <div className="text-left">
-                    <span className="block font-bold">Profile</span>
-                    <span className="block text-[10px] opacity-60 font-normal mt-0.5">SESSION & ACCOUNT</span>
                   </div>
                 </button>
 

@@ -1,7 +1,24 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, PanelLeftClose, PanelLeft } from 'lucide-react';
-import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile } from '../types';
+import { LayoutDashboard, History, Settings, LogOut, FileText, ChevronRight, Search, Filter, Trash2, FolderOpen, RefreshCw, X, PanelLeftClose, PanelLeft, User } from 'lucide-react';
+import {
+  Product,
+  SelectedItem,
+  CustomerInfo,
+  PaymentMethod,
+  QuotationStatus,
+  QuotationRecord,
+  ClientType,
+  Attachment,
+  AdminLog,
+  SystemBackup,
+  FollowUpLog,
+  PDFTemplate,
+  UserRole,
+  LaborService,
+  UploadedFile,
+  type SessionUserProfile,
+} from '../types';
 import { PRODUCTS, COMPANY_DETAILS, DEFAULT_PDF_TEMPLATE, INITIAL_CUSTOMER } from '../constants';
 import { processConversation } from '../services/geminiService';
 import { db, saveCatalog, savePipeline, saveAdminLogs, saveSettings, getSettings, saveCurrentAppState, getCurrentAppState } from '../services/db';
@@ -30,6 +47,7 @@ import * as XLSX from 'xlsx';
 import { fetchAllyOpportunities } from '../services/allyOpportunitiesApi';
 import { fetchEstimationFiles, type EstimationFileRecord } from '../services/estimationApi';
 import { upgradeTermsFromLegacy } from '../utils/upgradeTermsFromLegacy';
+import ProfileScreen from './ProfileScreen';
 
 interface DashboardProps {
   onLogout: () => void;
@@ -37,6 +55,9 @@ interface DashboardProps {
   /** Logged-in user's server Account_ID (pipeline isolation for SALES). */
   accountId: string;
   displayName: string;
+  sessionProfile: SessionUserProfile | null;
+  onRefreshSessionProfile: () => Promise<void>;
+  isRefreshingProfile: boolean;
 }
 
 function sanitizeAccountFileToken(s: string): string {
@@ -87,7 +108,15 @@ export interface Message {
   attachments?: { type: string; data: string; name?: string }[];
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole, accountId, displayName }) => {
+const Dashboard: React.FC<DashboardProps> = ({
+  onLogout,
+  userRole,
+  accountId,
+  displayName,
+  sessionProfile,
+  onRefreshSessionProfile,
+  isRefreshingProfile,
+}) => {
   const [items, setItems] = useState<SelectedItem[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [laborServices, setLaborServices] = useState<LaborService[]>([]);
@@ -98,7 +127,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole, accountId, di
   const [manualDiscountEnabled, setManualDiscountEnabled] = useState<boolean>(true);
   const [showVat, setShowVat] = useState<boolean>(true);
   const [currentStatus, setCurrentStatus] = useState<QuotationStatus>(QuotationStatus.INQUIRY);
-  const [activeTab, setActiveTab] = useState<'estimation' | 'quotation' | 'pipeline' | 'admin'>('estimation');
+  const [activeTab, setActiveTab] = useState<'estimation' | 'quotation' | 'pipeline' | 'profile' | 'admin'>('estimation');
   
   const [messages, setMessages] = useState<Message[]>([
     { role: 'model', content: "Hello! I'm your AA2000 Sales Assistant. I can help you build quotations faster. Just tell me what products you need, or upload a photo of a hand-written BOM or an Excel file!" }
@@ -1309,6 +1338,19 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole, accountId, di
                 </button>
 
                 <button
+                  onClick={() => setActiveTab('profile')}
+                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'profile' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
+                >
+                  <div className={`p-2 rounded-lg transition-colors ${activeTab === 'profile' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
+                    <User size={18} />
+                  </div>
+                  <div className="text-left">
+                    <span className="block font-bold">Profile</span>
+                    <span className="block text-[10px] opacity-60 font-normal mt-0.5">SESSION & ACCOUNT</span>
+                  </div>
+                </button>
+
+                <button
                   onClick={() => setActiveTab('admin')}
                   className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'admin' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
                 >
@@ -1327,9 +1369,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole, accountId, di
 
         <div className="mt-auto p-6 border-t border-slate-800/50">
           <div className="flex items-center justify-between group">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800">
-                {userRole === 'ADMIN' ? 'SA' : 'SE'}
+            <button
+              type="button"
+              onClick={() => setActiveTab('profile')}
+              className="flex items-center gap-3 text-left rounded-xl -m-1 p-1 pr-2 hover:bg-slate-800/70 transition-colors flex-1 min-w-0"
+              title="Open profile"
+            >
+              <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800 shrink-0">
+                {sessionProfile?.initials ?? (userRole === 'ADMIN' ? 'SA' : 'SE')}
               </div>
               <div className="min-w-0">
                 <p className="text-xs font-bold text-white truncate">
@@ -1345,7 +1392,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole, accountId, di
                   </p>
                 )}
               </div>
-            </div>
+            </button>
             <button onClick={onLogout} className="p-2 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-all">
               <LogOut size={18} />
             </button>
@@ -1807,6 +1854,30 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole, accountId, di
                 </table>
               </div>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'profile' && (
+          <div className="min-h-full bg-[#F8F9FA]">
+            {sessionProfile ? (
+              <ProfileScreen
+                profile={sessionProfile}
+                isRefreshing={isRefreshingProfile}
+                onRefresh={() => void onRefreshSessionProfile()}
+              />
+            ) : (
+              <div className="p-8 max-w-md mx-auto flex flex-col items-center justify-center min-h-[50vh] gap-4">
+                <p className="text-sm text-slate-600 font-medium">Loading your profile...</p>
+                <button
+                  type="button"
+                  onClick={() => void onRefreshSessionProfile()}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800"
+                >
+                  <RefreshCw size={14} className={isRefreshingProfile ? 'animate-spin' : ''} />
+                  Retry
+                </button>
+              </div>
+            )}
           </div>
         )}
 

@@ -944,6 +944,9 @@ const App: React.FC = () => {
       userRole={userRole}
       accountId={String(sessionProfile?.acc_ID ?? '').trim()}
       displayName={(sessionProfile?.displayName ?? '').trim()}
+      sessionProfile={sessionProfile}
+      onRefreshSessionProfile={refreshSessionProfile}
+      isRefreshingProfile={isRefreshingProfile}
     />
   );
 };

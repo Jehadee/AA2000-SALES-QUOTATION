@@ -14,6 +14,16 @@ interface BackendProduct {
   prod_price?: number | null;
 }
 
+function normalizeProductImageSource(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const value = raw.trim();
+  if (!value) return undefined;
+  if (/^data:image\//i.test(value)) return value;
+  if (/^https?:\/\//i.test(value) || value.startsWith('/')) return value;
+  // Backend commonly returns pure base64 bytes; default to jpeg if mime is not provided.
+  return `data:image/jpeg;base64,${value}`;
+}
+
 function firstNonEmptyString(...vals: unknown[]): string {
   for (const v of vals) {
     if (typeof v === 'string' && v.trim()) return v.trim();
@@ -220,6 +230,7 @@ function mapBackendProductToFrontend(row: BackendProduct, brandFromSupplier: str
     name: name || code || '—',
     description: name ? `Product: ${name}` : '',
     brand: brandFromSupplier.trim(),
+    imageUrl: normalizeProductImageSource(row.image_base64),
     baseCost,
     price: tier.endUserPrice,
     category: category || undefined,

@@ -5,6 +5,7 @@ import { Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { deriveTierPricesFromBasePrice, END_USER_MARKUP, roundMoney } from '../services/pricing';
 import TermsRichEditor from './TermsRichEditor';
+import { mergeApiQuotationLogoIfEmpty, QUOTATION_LOGO_DISPLAY_WIDTH } from '../services/quotationLogoApi';
 
 interface Props {
   currentProducts: Product[];
@@ -84,6 +85,24 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
     }
   }, [currentProducts, selectedBrand]);
 
+  const pdfTemplateRef = useRef(pdfTemplate);
+  pdfTemplateRef.current = pdfTemplate;
+  const onUpdateTemplateRef = useRef(onUpdateTemplate);
+  onUpdateTemplateRef.current = onUpdateTemplate;
+
+  useEffect(() => {
+    if (activeSubTab !== 'template') return;
+    let cancelled = false;
+    (async () => {
+      const merged = await mergeApiQuotationLogoIfEmpty(pdfTemplateRef.current);
+      if (cancelled || merged === pdfTemplateRef.current) return;
+      onUpdateTemplateRef.current(merged);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSubTab]);
+
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -93,7 +112,7 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
         const base64 = event.target?.result as string;
         handleUpdateTemplateField('companyInfo.logoUrl', base64);
         if (!pdfTemplate.companyInfo.logoWidth) {
-          handleUpdateTemplateField('companyInfo.logoWidth', 200);
+          handleUpdateTemplateField('companyInfo.logoWidth', QUOTATION_LOGO_DISPLAY_WIDTH);
         }
       };
       reader.readAsDataURL(file);
@@ -951,7 +970,7 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                               type="range"
                               min="50"
                               max="600"
-                              value={pdfTemplate.companyInfo.logoWidth || 200}
+                              value={pdfTemplate.companyInfo.logoWidth || QUOTATION_LOGO_DISPLAY_WIDTH}
                               onChange={(e) => handleUpdateTemplateField('companyInfo.logoWidth', parseInt(e.target.value))}
                               className="w-24 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
                             />
@@ -959,10 +978,13 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                               type="number"
                               min="50"
                               max="600"
-                              value={pdfTemplate.companyInfo.logoWidth || 200}
+                              value={pdfTemplate.companyInfo.logoWidth || QUOTATION_LOGO_DISPLAY_WIDTH}
                               onChange={(e) => {
                                 const raw = parseInt(e.target.value || '0', 10);
-                                const clamped = Math.max(50, Math.min(600, Number.isFinite(raw) ? raw : 200));
+                                const clamped = Math.max(
+                                  50,
+                                  Math.min(600, Number.isFinite(raw) ? raw : QUOTATION_LOGO_DISPLAY_WIDTH),
+                                );
                                 handleUpdateTemplateField('companyInfo.logoWidth', clamped);
                               }}
                               className="w-16 bg-slate-50 border border-slate-200 rounded px-1 py-0.5 text-[10px] font-bold text-slate-700 text-center"
@@ -997,11 +1019,11 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                 <div className="absolute top-0 right-0 bottom-0 left-[43%] bg-[#004a8d] z-0 pointer-events-none" aria-hidden />
 
                 <div className="relative z-10 flex w-full min-h-[152px] items-stretch py-2">
-                  <div className="flex-[0_0_41%] w-[41%] max-w-[41%] box-border flex items-center justify-center px-3 py-1 text-center">
+                  <div className="flex-[0_0_41%] w-[41%] max-w-[41%] box-border flex flex-col items-center justify-center gap-1 px-3 py-1 text-center">
                     <div
                       onClick={() => logoInputRef.current?.click()}
                       className="group flex w-full min-h-[7rem] cursor-pointer items-center justify-center"
-                      title="Click to upload logo"
+                      title="Click to upload or replace logo"
                     >
                       {pdfTemplate.companyInfo.logoUrl ? (
                         <div className="flex h-[100px] w-[180px] items-center justify-center overflow-hidden transition-transform duration-200">
@@ -1025,6 +1047,9 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                         </div>
                       )}
                     </div>
+                    <p className="max-w-[11rem] text-left text-[7px] font-medium leading-snug text-slate-500">
+                      
+                    </p>
                   </div>
 
                   <div className="flex-1 min-w-0 flex flex-col justify-center items-stretch text-center text-white px-5 space-y-0.5 self-center">

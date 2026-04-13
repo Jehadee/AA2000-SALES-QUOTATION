@@ -47,6 +47,7 @@ import * as XLSX from 'xlsx';
 import { fetchAllyOpportunities } from '../services/allyOpportunitiesApi';
 import { fetchEstimationFiles, type EstimationFileRecord } from '../services/estimationApi';
 import { upgradeTermsFromLegacy } from '../utils/upgradeTermsFromLegacy';
+import { mergeApiQuotationLogoIfEmpty } from '../services/quotationLogoApi';
 import ProfileScreen from './ProfileScreen';
 
 interface DashboardProps {
@@ -204,14 +205,14 @@ const Dashboard: React.FC<DashboardProps> = ({
         if (savedLogs.length > 0) setAdminLogs(savedLogs);
 
         const savedTemplate = await getSettings('pdf_template');
-        if (savedTemplate) {
-          const merged = upgradeTermsFromLegacy(savedTemplate);
-          setPdfTemplate(merged);
-          const before = JSON.stringify(savedTemplate.termsAndConditions ?? []);
-          const after = JSON.stringify(merged.termsAndConditions ?? []);
-          if (before !== after) {
-            await saveSettings('pdf_template', merged);
-          }
+        const baseTemplate: PDFTemplate = savedTemplate
+          ? upgradeTermsFromLegacy(savedTemplate)
+          : upgradeTermsFromLegacy(JSON.parse(JSON.stringify(DEFAULT_PDF_TEMPLATE)) as PDFTemplate);
+        const nextTemplate = await mergeApiQuotationLogoIfEmpty(baseTemplate);
+        setPdfTemplate(nextTemplate);
+        const persistKey = savedTemplate ? JSON.stringify(savedTemplate) : null;
+        if (persistKey !== JSON.stringify(nextTemplate)) {
+          await saveSettings('pdf_template', nextTemplate);
         }
 
         const savedAppState = await getCurrentAppState();
@@ -296,10 +297,10 @@ const Dashboard: React.FC<DashboardProps> = ({
     setTimeout(() => setToast(null), 3000);
   };
 
-  const persistTemplate = async (template: PDFTemplate) => {
+  const persistTemplate = useCallback(async (template: PDFTemplate) => {
     setPdfTemplate(template);
     await saveSettings('pdf_template', template);
-  };
+  }, []);
 
   const persistCatalog = async (products: Product[]) => {
     setDynamicProducts(products);

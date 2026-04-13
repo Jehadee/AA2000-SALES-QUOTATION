@@ -537,6 +537,22 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
     handleUpdateTemplateField('termsAndConditions', newTerms);
   };
 
+  const handleAddTermConditionRow = () => {
+    const nextIndex = pdfTemplate.termsAndConditions.length + 1;
+    const newTerms = [
+      ...pdfTemplate.termsAndConditions,
+      { key: String(nextIndex), value: '' },
+    ];
+    handleUpdateTemplateField('termsAndConditions', newTerms);
+  };
+
+  const handleRemoveTermConditionRow = (index: number) => {
+    const next = pdfTemplate.termsAndConditions.filter((_, i) => i !== index);
+    // Keep at least one row so the section remains editable.
+    const normalized = next.length > 0 ? next : [{ key: '1', value: '' }];
+    handleUpdateTemplateField('termsAndConditions', normalized);
+  };
+
   return (
     <>
       {/* Custom Delete Confirmation Modal */}
@@ -1124,12 +1140,19 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
 
                 {/* TERMS SECTION */}
                 <div className="border border-black overflow-hidden">
-                  <div className="bg-[#C5D4E0] text-center font-bold text-[9pt] border-b border-black py-2 uppercase tracking-wide text-neutral-900">
+                  <div className="bg-[#C5D4E0] text-center font-bold text-[9pt] border-b border-black py-2 uppercase tracking-wide text-neutral-900 flex items-center justify-center gap-2">
                     TERMS AND CONDITIONS
+                    <button
+                      onClick={handleAddTermConditionRow}
+                      className="p-1 bg-black text-white rounded hover:bg-slate-800 transition-all"
+                      title="Add terms row"
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4" /></svg>
+                    </button>
                   </div>
                   <div className="p-4 space-y-3">
                     {pdfTemplate.termsAndConditions.map((term, idx) => (
-                      <div key={idx} className="flex gap-3 items-start">
+                      <div key={idx} className="flex gap-3 items-start group">
                         <input
                           type="text"
                           value={term.key}
@@ -1141,6 +1164,13 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                           onChange={(html) => handleUpdateTerm(idx, 'value', html)}
                           className="flex-1"
                         />
+                        <button
+                          onClick={() => handleRemoveTermConditionRow(idx)}
+                          className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-50 rounded transition-all mt-1"
+                          title="Remove terms row"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
+                        </button>
                       </div>
                     ))}
                   </div>

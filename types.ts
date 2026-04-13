@@ -153,6 +153,8 @@ export interface PDFTemplate {
     email: string;
     website: string;
     logoUrl?: string;
+    /** When true, do not auto-fill logo from API fallback endpoint. */
+    disableAutoLogoFetch?: boolean;
     logoWidth?: number;
     logoXOffset?: number;
     logoYOffset?: number;

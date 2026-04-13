@@ -15,6 +15,24 @@ export function getQuotationLogoUrl(): string | null {
   return `${base}${normalized}`;
 }
 
+export function resolveApiAssetUrl(pathOrUrl: string): string {
+  const v = (pathOrUrl || '').trim();
+  if (!v) return v;
+  if (/^https?:\/\//i.test(v) || v.startsWith('data:')) return v;
+  const base = getNormalizedApiBaseUrl().replace(/\/+$/, '');
+  const normalized = v.startsWith('/') ? v : `/${v}`;
+  return `${base}${normalized}`;
+}
+
+/** GET-only mode: return the backend logo endpoint (cache-busted) for immediate refresh. */
+export async function uploadQuotationLogoFile(_file: File): Promise<string> {
+  const dataUrl = await fetchQuotationLogoAsDataUrl();
+  if (!dataUrl) {
+    throw new Error('Failed to fetch logo from server endpoint.');
+  }
+  return dataUrl;
+}
+
 /** Fetches the logo as a data URL so PDF capture works without cross-origin canvas issues. */
 export async function fetchQuotationLogoAsDataUrl(): Promise<string | null> {
   const url = getQuotationLogoUrl();

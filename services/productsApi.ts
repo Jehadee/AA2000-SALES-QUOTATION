@@ -24,6 +24,15 @@ function normalizeProductImageSource(raw: unknown): string | undefined {
   return `data:image/jpeg;base64,${value}`;
 }
 
+function toRawBase64Image(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const value = raw.trim();
+  if (!value) return undefined;
+  const match = value.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
+  if (match?.[1]) return match[1];
+  return value;
+}
+
 function firstNonEmptyString(...vals: unknown[]): string {
   for (const v of vals) {
     if (typeof v === 'string' && v.trim()) return v.trim();
@@ -216,6 +225,17 @@ function getProductsUrl(): string {
   return `${baseClean}/products/get/products`;
 }
 
+function getAddProductUrl(): string {
+  const base = getNormalizedApiBaseUrl();
+  const pathOverride = (import.meta as any).env?.VITE_ADD_PRODUCT_PATH as string | undefined;
+  const baseClean = base.replace(/\/+$/, '');
+  if (pathOverride != null && pathOverride.trim() !== '') {
+    const p = pathOverride.trim().replace(/^\/+/, '/');
+    return `${baseClean}${p}`;
+  }
+  return `${baseClean}/products/add/product`;
+}
+
 function mapBackendProductToFrontend(row: BackendProduct, brandFromSupplier: string): Product {
   const id = Number(row.prod_ID ?? 0);
   const code = String(row.prod_Code ?? '').trim();
@@ -230,7 +250,9 @@ function mapBackendProductToFrontend(row: BackendProduct, brandFromSupplier: str
     name: name || code || '—',
     description: name ? `Product: ${name}` : '',
     brand: brandFromSupplier.trim(),
-    imageUrl: normalizeProductImageSource(row.image_base64),
+    imageUrl: normalizeProductImageSource(
+      row.image_base64 ?? (row as unknown as Record<string, unknown>).imageUrl ?? (row as unknown as Record<string, unknown>).prod_image
+    ),
     baseCost,
     price: tier.endUserPrice,
     category: category || undefined,
@@ -241,6 +263,77 @@ function mapBackendProductToFrontend(row: BackendProduct, brandFromSupplier: str
     contractorBigVolumePrice: tier.contractorBigVolumePrice,
     endUserBigVolumePrice: tier.endUserBigVolumePrice,
   };
+}
+
+export async function createProductOnApi(product: Product): Promise<void> {
+  const url = getAddProductUrl();
+  const payload = {
+    prod_Code: product.model,
+    prod_Name: product.name,
+    image_base64: toRawBase64Image(product.imageUrl),
+    prod_price: Number(product.baseCost || product.price || 0),
+  };
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = await res.text();
+    } catch {
+      detail = '';
+    }
+    throw new Error(`Failed to save product to database (${res.status})${detail ? `: ${detail}` : ''}`);
+  }
+}
+
+function getDeleteProductPathOverride(): string {
+  const raw = ((import.meta as any).env?.VITE_DELETE_PRODUCT_PATH as string | undefined) ?? '';
+  return raw.trim();
+}
+
+async function tryDeleteProduct(url: string, method: 'DELETE' | 'POST', body?: Record<string, unknown>): Promise<boolean> {
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: { Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteProductOnApi(product: Product): Promise<void> {
+  const base = getNormalizedApiBaseUrl().replace(/\/+$/, '');
+  const id = Number(product.id);
+  const override = getDeleteProductPathOverride();
+
+  const targets: Array<{ url: string; method: 'DELETE' | 'POST'; body?: Record<string, unknown> }> = [];
+
+  if (override) {
+    const normalized = override.startsWith('/') ? override : `/${override}`;
+    if (normalized.includes('{id}')) {
+      targets.push({ url: `${base}${normalized.replace('{id}', String(id))}`, method: 'DELETE' });
+    } else {
+      const full = `${base}${normalized}`;
+      targets.push({ url: full, method: 'DELETE', body: { prod_ID: id, id } });
+      targets.push({ url: full, method: 'POST', body: { prod_ID: id, id } });
+    }
+  } else {
+    targets.push({ url: `${base}/products/delete/product/${id}`, method: 'DELETE' });
+    targets.push({ url: `${base}/products/delete/product`, method: 'DELETE', body: { prod_ID: id, id } });
+    targets.push({ url: `${base}/products/delete/product`, method: 'POST', body: { prod_ID: id, id } });
+    targets.push({ url: `${base}/products/delete/${id}`, method: 'DELETE' });
+  }
+
+  for (const t of targets) {
+    if (await tryDeleteProduct(t.url, t.method, t.body)) return;
+  }
+  throw new Error(`Failed to delete product from database (prod_ID=${id})`);
 }
 
 export async function fetchProducts(): Promise<Product[]> {

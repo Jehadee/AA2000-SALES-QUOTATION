@@ -41,7 +41,7 @@ import {
   pickProjectIdFromSaveQuotationResponse,
   toSqlDateOnly,
 } from '../services/quotationFileApi';
-import { fetchProducts } from '../services/productsApi';
+import { createProductOnApi, deleteProductOnApi, fetchProducts } from '../services/productsApi';
 import { deriveTierPricesFromBasePrice } from '../services/pricing';
 import * as XLSX from 'xlsx';
 import { fetchAllyOpportunities } from '../services/allyOpportunitiesApi';
@@ -680,8 +680,10 @@ const Dashboard: React.FC<DashboardProps> = ({
     if (exists) {
       throw new Error(`Product with model "${product.model}" already exists.`);
     }
-    await persistCatalog([...dynamicProducts, product]);
-    showToast(`Added new product: ${product.model}`, 'success');
+    await createProductOnApi(product);
+    const refreshedProducts = await fetchProducts();
+    await persistCatalog(refreshedProducts);
+    showToast(`Added new product to database: ${product.model}`, 'success');
   }, [dynamicProducts]);
 
   const removeUploadedFile = useCallback((fileId: string) => {
@@ -1877,7 +1879,48 @@ const Dashboard: React.FC<DashboardProps> = ({
               currentPipeline={savedQuotes} 
               pdfTemplate={pdfTemplate}
               onUpdateCatalog={(products, log) => {
-                persistCatalog(products);
+                const removedProducts = dynamicProducts.filter(
+                  (existing) => !products.some((next) => next.id === existing.id)
+                );
+                const addedProducts = products.filter(
+                  (next) =>
+                    !dynamicProducts.some(
+                      (existing) =>
+                        existing.id === next.id ||
+                        existing.model.toLowerCase() === next.model.toLowerCase()
+                    )
+                );
+
+                (async () => {
+                  try {
+                    if (addedProducts.length > 0) {
+                      await Promise.all(addedProducts.map((p) => createProductOnApi(p)));
+                    }
+                    if (removedProducts.length > 0) {
+                      await Promise.all(removedProducts.map((p) => deleteProductOnApi(p)));
+                    }
+                    const refreshedProducts = await fetchProducts();
+                    await persistCatalog(refreshedProducts);
+                    if (addedProducts.length > 0 && removedProducts.length > 0) {
+                      showToast('Catalog synced to database (add + delete).', 'success');
+                    } else if (addedProducts.length > 0) {
+                      showToast(`Uploaded ${addedProducts.length} product(s) to database.`, 'success');
+                    } else if (removedProducts.length > 0) {
+                      showToast(`Deleted ${removedProducts.length} product(s) from database.`, 'success');
+                    } else {
+                      await persistCatalog(products);
+                    }
+                  } catch (e: any) {
+                    console.error('Catalog sync to database failed:', e);
+                    try {
+                      const refreshedProducts = await fetchProducts();
+                      await persistCatalog(refreshedProducts);
+                    } catch {
+                      // If refetch fails, keep existing local catalog (last known DB snapshot)
+                    }
+                    showToast(`Database sync failed: ${e?.message || 'Server error'}`, 'error');
+                  }
+                })();
                 if (log) {
                   const newLog: AdminLog = {
                     id: Date.now().toString(),

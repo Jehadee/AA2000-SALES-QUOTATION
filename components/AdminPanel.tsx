@@ -5,7 +5,7 @@ import { Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { deriveTierPricesFromBasePrice, END_USER_MARKUP, roundMoney } from '../services/pricing';
 import TermsRichEditor from './TermsRichEditor';
-import { mergeApiQuotationLogoIfEmpty, QUOTATION_LOGO_DISPLAY_WIDTH } from '../services/quotationLogoApi';
+import { mergeApiQuotationLogoIfEmpty, QUOTATION_LOGO_DISPLAY_WIDTH, uploadQuotationLogoFile } from '../services/quotationLogoApi';
 
 interface Props {
   currentProducts: Product[];
@@ -107,15 +107,11 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const base64 = event.target?.result as string;
-        handleUpdateTemplateField('companyInfo.logoUrl', base64);
-        if (!pdfTemplate.companyInfo.logoWidth) {
-          handleUpdateTemplateField('companyInfo.logoWidth', QUOTATION_LOGO_DISPLAY_WIDTH);
-        }
-      };
-      reader.readAsDataURL(file);
+      const uploadedLogoUrl = await uploadQuotationLogoFile(file);
+      handleUpdateTemplateField('companyInfo.logoUrl', uploadedLogoUrl);
+      if (!pdfTemplate.companyInfo.logoWidth) {
+        handleUpdateTemplateField('companyInfo.logoWidth', QUOTATION_LOGO_DISPLAY_WIDTH);
+      }
     } catch (err) {
       console.error("Logo upload failed", err);
     }
@@ -991,7 +987,14 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                             />
                           </div>
                         </div>
-                        <button onClick={() => handleUpdateTemplateField('companyInfo.logoUrl', undefined)} className="p-2 text-red-400 hover:text-red-600"><Trash2 size={16} /></button>
+                        <button
+                          onClick={() => {
+                            handleUpdateTemplateField('companyInfo.logoUrl', undefined);
+                          }}
+                          className="p-2 text-red-400 hover:text-red-600"
+                        >
+                          <Trash2 size={16} />
+                        </button>
                       </div>
                     )}
                     

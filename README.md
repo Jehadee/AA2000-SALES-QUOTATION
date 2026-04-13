@@ -48,3 +48,7 @@ The Gemini API key is **baked in at build time**. If the AI chat fails or does n
 4. Wait for the deploy to finish and open the app again. The AI should respond.
 
 If it still fails, open the browser console (F12) on the Vercel URL and check for errors mentioning “API key” or “403”.
+
+### GitHub push note
+
+If `git push` shows `Everything up-to-date`, there are no new committed file changes yet. Run `git status` first, then commit your edits before pushing.

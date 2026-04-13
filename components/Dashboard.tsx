@@ -1308,20 +1308,18 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole, accountId, di
                   </div>
                 </button>
 
-                {userRole === 'ADMIN' && (
-                  <button
-                    onClick={() => setActiveTab('admin')}
-                    className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'admin' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
-                  >
-                    <div className={`p-2 rounded-lg transition-colors ${activeTab === 'admin' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
-                      <Settings size={18} />
-                    </div>
-                    <div className="text-left">
-                      <span className="block font-bold">Admin Console</span>
-                      <span className="block text-[10px] opacity-60 font-normal mt-0.5">CATALOG & SYSTEM</span>
-                    </div>
-                  </button>
-                )}
+                <button
+                  onClick={() => setActiveTab('admin')}
+                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all group ${activeTab === 'admin' ? 'bg-[#1E293B] text-white shadow-lg shadow-black/20 border border-slate-700/50' : 'text-slate-400 hover:text-white hover:bg-[#1E293B]/50'}`}
+                >
+                  <div className={`p-2 rounded-lg transition-colors ${activeTab === 'admin' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-500 group-hover:text-slate-300'}`}>
+                    <Settings size={18} />
+                  </div>
+                  <div className="text-left">
+                    <span className="block font-bold">Admin Console</span>
+                    <span className="block text-[10px] opacity-60 font-normal mt-0.5">CATALOG & SYSTEM</span>
+                  </div>
+                </button>
               </nav>
             </div>
           </div>

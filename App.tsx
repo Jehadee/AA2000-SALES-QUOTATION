@@ -942,9 +942,8 @@ const App: React.FC = () => {
     <Dashboard
       onLogout={handleLogout}
       userRole={userRole}
-      sessionProfile={sessionProfile}
-      onRefreshSessionProfile={refreshSessionProfile}
-      isRefreshingProfile={isRefreshingProfile}
+      accountId={String(sessionProfile?.acc_ID ?? '').trim()}
+      displayName={(sessionProfile?.displayName ?? '').trim()}
     />
   );
 };

@@ -4,6 +4,7 @@ import { Product, AdminLog, QuotationRecord, SystemBackup, PDFTemplate } from '.
 import { Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { deriveTierPricesFromBasePrice, END_USER_MARKUP, roundMoney } from '../services/pricing';
+import TermsRichEditor from './TermsRichEditor';
 
 interface Props {
   currentProducts: Product[];
@@ -838,6 +839,17 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
               <div className="flex-1">
                 <h2 className="text-4xl font-black text-slate-900 leading-tight">PDF Template Editor</h2>
                 <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-2 max-w-xs">Live visual editor for your quotation format</p>
+                <p className="text-[10px] text-slate-600 mt-4 max-w-2xl leading-relaxed">
+                  <span className="font-bold text-slate-800">Terms and conditions</span> use a simple rich editor:{' '}
+                  <kbd className="rounded border border-slate-300 bg-white px-1 font-mono text-[9px]">Ctrl</kbd>
+                  {' + '}
+                  <kbd className="rounded border border-slate-300 bg-white px-1 font-mono text-[9px]">B</kbd>
+                  {' '}for bold; choose any color with the swatch, highlight text, then{' '}
+                  <span className="font-semibold text-slate-800">Apply</span>. <span className="font-semibold">Red</span> is a
+                  quick VAT-style preset. Pasting is plain text only. Legacy{' '}
+                  <code className="rounded bg-slate-200 px-1 font-mono text-[9px]">{'{{b}}'}</code>
+                  {' '}markers still load and convert automatically.
+                </p>
               </div>
               
               <div className="flex flex-col gap-4 w-full md:w-auto">
@@ -1083,21 +1095,23 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                 </div>
 
                 {/* TERMS SECTION */}
-                <div className="border border-black">
-                  <div className="bg-[#003366] text-white text-center font-bold text-[9pt] border-b border-black py-1.5 uppercase tracking-widest">TERMS AND CONDITIONS</div>
+                <div className="border border-black overflow-hidden">
+                  <div className="bg-[#C5D4E0] text-center font-bold text-[9pt] border-b border-black py-2 uppercase tracking-wide text-neutral-900">
+                    TERMS AND CONDITIONS
+                  </div>
                   <div className="p-4 space-y-3">
                     {pdfTemplate.termsAndConditions.map((term, idx) => (
-                      <div key={idx} className="flex gap-3">
-                        <input 
-                          type="text" 
-                          value={term.key} 
+                      <div key={idx} className="flex gap-3 items-start">
+                        <input
+                          type="text"
+                          value={term.key}
                           onChange={(e) => handleUpdateTerm(idx, 'key', e.target.value)}
-                          className="w-8 h-8 flex items-center justify-center bg-slate-100 border border-slate-200 rounded text-[8pt] font-black text-center outline-none"
+                          className="w-8 h-8 flex items-center justify-center bg-slate-100 border border-slate-200 rounded text-[8pt] font-black text-center outline-none shrink-0"
                         />
-                        <textarea 
-                          value={term.value} 
-                          onChange={(e) => handleUpdateTerm(idx, 'value', e.target.value)}
-                          className="flex-1 bg-transparent border-b border-transparent hover:border-slate-200 focus:border-indigo-500 outline-none text-[8pt] font-bold uppercase resize-none h-12 leading-tight"
+                        <TermsRichEditor
+                          value={term.value}
+                          onChange={(html) => handleUpdateTerm(idx, 'value', html)}
+                          className="flex-1"
                         />
                       </div>
                     ))}

@@ -1,4 +1,5 @@
 import { jsPDF } from 'jspdf';
+import { getNormalizedApiBaseUrl } from './apiBaseUrl';
 
 export interface UploadQuotationResponse {
   message?: string;
@@ -70,7 +71,7 @@ function pickFilePathFromUploadJson(data: unknown): string | undefined {
 }
 
 function getUploadQuotationUrl(): string {
-  const base = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? '';
+  const base = getNormalizedApiBaseUrl();
   const override = (import.meta as any).env?.VITE_UPLOAD_QUOTATION_PATH as string | undefined;
   const baseClean = base.replace(/\/+$/, '');
   if (override && override.trim()) {
@@ -119,7 +120,7 @@ export async function uploadQuotationFile(pdfBlob: Blob, fileName: string): Prom
 }
 
 function getSubmitPipelineTriggerUrl(): string {
-  const base = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? '';
+  const base = getNormalizedApiBaseUrl();
   const override = (import.meta as any).env?.VITE_SUBMIT_PIPELINE_UPLOAD_PATH as string | undefined;
   const baseClean = base.replace(/\/+$/, '');
   if (override && override.trim()) {
@@ -130,7 +131,7 @@ function getSubmitPipelineTriggerUrl(): string {
 }
 
 function getSaveQuotationProjectUrl(): string {
-  const base = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? '';
+  const base = getNormalizedApiBaseUrl();
   const override = (import.meta as any).env?.VITE_SAVE_QUOTATION_PATH as string | undefined;
   const baseClean = base.replace(/\/+$/, '');
   if (override && override.trim()) {
@@ -142,7 +143,7 @@ function getSaveQuotationProjectUrl(): string {
 }
 
 function getSaveProjectDetailsUrl(): string {
-  const base = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? '';
+  const base = getNormalizedApiBaseUrl();
   const override = (import.meta as any).env?.VITE_SAVE_PROJECT_DETAILS_PATH as string | undefined;
   const baseClean = base.replace(/\/+$/, '');
   if (override && override.trim()) {

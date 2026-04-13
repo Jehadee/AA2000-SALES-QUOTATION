@@ -171,6 +171,10 @@ export interface PDFTemplate {
     };
   };
   notesAndRemarks: string[];
+  /**
+   * Sanitized HTML for the PDF (rich editor: `strong` / `b`, and `span` with allowed `color` + optional `font-weight`).
+   * Legacy `{{b}}` / `{{r}}` strings are migrated on load.
+   */
   termsAndConditions: { key: string; value: string }[];
   paymentTerms: {
     supplyOfDevices: string;

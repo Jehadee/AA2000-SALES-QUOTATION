@@ -72,14 +72,43 @@ export const DEFAULT_PDF_TEMPLATE: PDFTemplate = {
     "Professional project assistance (SAFETY OFFICER) – As Required",
     "COVID-19 Related requirements."
   ],
+  // Terms `value`: sanitized HTML from the rich editor (bold / red emphasis).
   termsAndConditions: [
-    { key: "A", value: "Unless specified, above given prices are VAT Included." },
-    { key: "B", value: "Prices are based on cost and conditions existing on date of quotation and are SUBJECT TO CHANGE BY THE SELLER UPON FINAL ACCEPTANCE." },
-    { key: "C", value: "Others: Any other materials/equipment/permits/installation/bonds works not stated herein shall be considered as ADDITIONAL COST." },
-    { key: "D", value: "Warehouse Charges/Penalties: There will be a 500 pesos penalty per day, if devices are not picked up upon notice of availability" },
-    { key: "E", value: "A penalty charge of 40% of the total contract price will be imposed for cancellation of Purchase Order." },
-    { key: "F", value: "LATE PAYMENT PENALTY CHARGE: Any payments not made within the specified period of time, it will incur an interest charge at the rate of 1% of the total contract/P.O. price." },
-    { key: "G", value: "Delivery: For client charge or Pick up by Client. (For Supply Only)" }
+    {
+      key: "A",
+      value:
+        'Unless specified, above given prices are <span style="color:#b91c1c;font-weight:700">VAT EXCLUDED.</span>',
+    },
+    {
+      key: "B",
+      value:
+        "Prices are based on cost and conditions existing on date of quotation and are <strong>SUBJECT TO CHANGE BY THE SELLER UPON FINAL ACCEPTANCE.</strong>",
+    },
+    {
+      key: "C",
+      value:
+        "<strong>Others:</strong> Any other materials/equipment/permits/installation/bonds works not stated herein shall be considered as ADDITIONAL COST.",
+    },
+    {
+      key: "D",
+      value:
+        "<strong>Warehouse Charges/Penalties:</strong> There will be a 500 pesos penalty per day, if devices are not picked up upon notice of availability",
+    },
+    {
+      key: "E",
+      value:
+        "A penalty charge of 40% of the total contract price will be imposed for cancellation of Purchase Order.",
+    },
+    {
+      key: "F",
+      value:
+        "<strong>LATE PAYMENT PENALTY CHARGE:</strong> Any payments not made within the specified period of time, it will incur an interest charge at the rate of 1% of the total contract/P.O. price.",
+    },
+    {
+      key: "G",
+      value:
+        "<strong>Delivery:</strong> For client charge or Pick up by Client. (For Supply Only)",
+    },
   ],
   paymentTerms: {
     supplyOfDevices: "50% Downpayment ; 50% Upon pick up/delivery of the items.",

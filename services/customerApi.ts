@@ -1,4 +1,5 @@
 import type { CustomerInfo } from '../types';
+import { getNormalizedApiBaseUrl } from './apiBaseUrl';
 
 /** Payload shape aligned with backend createCustomer: /customers/add/customer */
 type AddCustomerPayload = {
@@ -36,7 +37,7 @@ export type CustomerDirectoryItem = {
 };
 
 function getAddCustomerUrl(): string {
-  const base = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? '';
+  const base = getNormalizedApiBaseUrl();
   const pathOverride = (import.meta as any).env?.VITE_ADD_CUSTOMER_PATH as string | undefined;
   const baseClean = base.replace(/\/+$/, '');
   if (pathOverride != null && pathOverride.trim() !== '') {
@@ -48,7 +49,7 @@ function getAddCustomerUrl(): string {
 }
 
 function getCustomersUrl(): string {
-  const base = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? '';
+  const base = getNormalizedApiBaseUrl();
   const pathOverride = (import.meta as any).env?.VITE_GET_CUSTOMERS_PATH as string | undefined;
   const baseClean = base.replace(/\/+$/, '');
   if (pathOverride != null && pathOverride.trim() !== '') {

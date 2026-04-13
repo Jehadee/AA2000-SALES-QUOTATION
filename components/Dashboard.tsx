@@ -29,6 +29,7 @@ import { deriveTierPricesFromBasePrice } from '../services/pricing';
 import * as XLSX from 'xlsx';
 import { fetchAllyOpportunities } from '../services/allyOpportunitiesApi';
 import { fetchEstimationFiles, type EstimationFileRecord } from '../services/estimationApi';
+import { upgradeTermsFromLegacy } from '../utils/upgradeTermsFromLegacy';
 
 interface DashboardProps {
   onLogout: () => void;
@@ -174,7 +175,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole, accountId, di
         if (savedLogs.length > 0) setAdminLogs(savedLogs);
 
         const savedTemplate = await getSettings('pdf_template');
-        if (savedTemplate) setPdfTemplate(savedTemplate);
+        if (savedTemplate) {
+          const merged = upgradeTermsFromLegacy(savedTemplate);
+          setPdfTemplate(merged);
+          const before = JSON.stringify(savedTemplate.termsAndConditions ?? []);
+          const after = JSON.stringify(merged.termsAndConditions ?? []);
+          if (before !== after) {
+            await saveSettings('pdf_template', merged);
+          }
+        }
 
         const savedAppState = await getCurrentAppState();
         if (savedAppState) {
@@ -1369,7 +1378,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole, accountId, di
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Workspace</p>
                   <h2 className="text-2xl font-black text-slate-900">Estimation Inbox</h2>
                   <p className="mt-2 text-sm text-slate-500 max-w-2xl">
-                    Review incoming estimation files, download originals, and start drafting a quotation in one click.
+                    Review incoming estimation PDFs, download originals, and start drafting a quotation in one click.
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
@@ -1545,7 +1554,20 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole, accountId, di
                           <div className="max-w-md space-y-2">
                             <p className="text-sm font-bold text-slate-800">Preview is not available in the browser</p>
                             <p className="text-xs text-slate-600 leading-relaxed">
-                              Word files are normally shown with Microsoft&apos;s online viewer, which only works when the file address is reachable from the public internet (not local networks or dev tunnels). Open the file in a new tab to view it with your signed-in session.
+                              {selectedEstimationFile.isPdf ? (
+                                <>
+                                  PDFs usually open inside this panel when the server allows embedding. If you only see a blank area, the server may be blocking iframes or your browser blocked mixed content. Use{' '}
+                                  <span className="font-semibold text-slate-800">Open original file</span> above to view the PDF in a new tab with your session.
+                                </>
+                              ) : selectedEstimationFile.isDocx ? (
+                                <>
+                                  Word files are often shown with Microsoft&apos;s online viewer, which only works when the file URL is reachable from the public internet (not all local or tunnel URLs). Open the file in a new tab to view it with your session.
+                                </>
+                              ) : (
+                                <>
+                                  Open the file in a new tab to view it. If this is a PDF, ensure the file name ends with <span className="font-mono">.pdf</span> so the app can pick the right viewer.
+                                </>
+                              )}
                             </p>
                           </div>
                           <a

@@ -20,7 +20,7 @@ import {
   type SessionUserProfile,
 } from '../types';
 import { PRODUCTS, COMPANY_DETAILS, DEFAULT_PDF_TEMPLATE, INITIAL_CUSTOMER } from '../constants';
-import { processConversation } from '../services/geminiService';
+import { sendChatBotMessage } from '../services/chatBotApi';
 import { db, saveCatalog, savePipeline, saveAdminLogs, saveSettings, getSettings, saveCurrentAppState, getCurrentAppState } from '../services/db';
 import CustomerForm from './CustomerForm';
 import QuotationSummary from './QuotationSummary';
@@ -34,6 +34,8 @@ import { sendQuotationEmail } from '../services/emailService';
 import { blobToBase64, generateQuotationPDF } from '../services/pdfService';
 import { addCustomer, extractCustomerIdFromAddResponse } from '../services/customerApi';
 import {
+  fetchProjectsByAccount,
+  type AccountProjectsResponseRow,
   triggerPipelineUploadHook,
   uploadQuotationFile,
   saveQuotationProject,
@@ -48,7 +50,19 @@ import { fetchAllyOpportunities } from '../services/allyOpportunitiesApi';
 import { fetchEstimationFiles, type EstimationFileRecord } from '../services/estimationApi';
 import { upgradeTermsFromLegacy } from '../utils/upgradeTermsFromLegacy';
 import { mergeApiQuotationLogoIfEmpty } from '../services/quotationLogoApi';
+import {
+  compactCustomerPatch,
+  matchProductFromCatalog,
+  parseQuotationExtractionFromAssistantReply,
+} from '../utils/quotationExtractionFromChat';
 import ProfileScreen from './ProfileScreen';
+
+/** Appended to chatbot requests when an image or spreadsheet context is present so we can auto-fill the quotation. */
+const CHAT_QUOTATION_EXTRACTION_INSTRUCTION = `---QUOTATION_JSON---
+After your natural-language answer, append ONE valid JSON object (no markdown code fences) containing structured data you inferred from the document. Shape:
+{"customerUpdate":{"fullName":"","companyName":"","email":"","phone":"","address":"","projectFor":"","projectSite":"","position":"","attentionTo":"","clientType":""},"itemsToAdd":[{"model":"text as printed for SKU/model","quantity":1}]}
+Rules: Use only fields you can read. Use "" for unknown strings. clientType must be one of: SYSTEM_CONTRACTOR, END_USER, DEALER, GOVERNMENT. itemsToAdd must list each product line with quantity; "model" should match the document wording so it can be matched to the catalog.
+---END---`;
 
 interface DashboardProps {
   onLogout: () => void;
@@ -146,10 +160,13 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [dynamicProducts, setDynamicProducts] = useState<Product[]>([]);
   const [adminLogs, setAdminLogs] = useState<AdminLog[]>([]);
   const [pdfTemplate, setPdfTemplate] = useState<PDFTemplate>(DEFAULT_PDF_TEMPLATE);
+  const [previewReadOnly, setPreviewReadOnly] = useState(false);
+  const [previewTemplateOverride, setPreviewTemplateOverride] = useState<PDFTemplate | null>(null);
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
   
   const [pipelineSearch, setPipelineSearch] = useState('');
   const [pipelineStatusFilter, setPipelineStatusFilter] = useState<QuotationStatus | 'ALL'>('ALL');
+  const [isLoadingPipelineServer, setIsLoadingPipelineServer] = useState(false);
   const [estimationFiles, setEstimationFiles] = useState<EstimationFileRecord[]>([]);
   const [isLoadingEstimations, setIsLoadingEstimations] = useState(false);
   const [estimationError, setEstimationError] = useState<string | null>(null);
@@ -302,6 +319,24 @@ const Dashboard: React.FC<DashboardProps> = ({
     await saveSettings('pdf_template', template);
   }, []);
 
+  const openEditablePreview = useCallback(() => {
+    setPreviewReadOnly(false);
+    setPreviewTemplateOverride(null);
+    setIsPreviewOpen(true);
+  }, []);
+
+  const openReadOnlyPreview = useCallback((lockedTemplate?: PDFTemplate | null) => {
+    setPreviewReadOnly(true);
+    setPreviewTemplateOverride(lockedTemplate || null);
+    setIsPreviewOpen(true);
+  }, []);
+
+  const closePreview = useCallback(() => {
+    setIsPreviewOpen(false);
+    setPreviewReadOnly(false);
+    setPreviewTemplateOverride(null);
+  }, []);
+
   const persistCatalog = async (products: Product[]) => {
     setDynamicProducts(products);
     await saveCatalog(products);
@@ -310,6 +345,66 @@ const Dashboard: React.FC<DashboardProps> = ({
   const persistLogs = async (logs: AdminLog[]) => {
     setAdminLogs(logs);
     await saveAdminLogs(logs);
+  };
+
+  const mapServerStatusToQuotationStatus = (raw: unknown): QuotationStatus => {
+    const s = String(raw ?? '').trim().toUpperCase();
+    if (s.includes('ACCEPT')) return QuotationStatus.ACCEPTED;
+    if (s.includes('REJECT')) return QuotationStatus.REJECTED;
+    if (s.includes('PENDING')) return QuotationStatus.DECISION;
+    if (s.includes('PROGRESS')) return QuotationStatus.PREPARATION;
+    return QuotationStatus.INQUIRY;
+  };
+
+  const toCustomerFullNameFromServer = (p: AccountProjectsResponseRow): string => {
+    if (typeof p.customerFullName === 'string' && p.customerFullName.trim()) return p.customerFullName.trim();
+    const f = p.Customer?.cus_fname?.trim() || '';
+    const m = p.Customer?.cus_mname?.trim() || '';
+    const l = p.Customer?.cus_lname?.trim() || '';
+    return [f, m, l].filter(Boolean).join(' ').trim() || 'No Customer Found';
+  };
+
+  const mapServerProjectToQuote = (p: AccountProjectsResponseRow): QuotationRecord | null => {
+    const projId = p.Proj_ID ?? p.proj_ID;
+    if (projId == null) return null;
+    const created = (typeof p.Start_date === 'string' && p.Start_date.trim()) ? p.Start_date : new Date().toISOString();
+    const fullName = toCustomerFullNameFromServer(p);
+    const companyName = String(p.Customer?.company_name ?? '').trim();
+    const objective = String(p.objective ?? '').trim();
+    const activity = String(p.activity ?? '').trim();
+    const customer: CustomerInfo = {
+      ...INITIAL_CUSTOMER,
+      fullName,
+      companyName,
+      projectFor: objective || activity,
+    };
+    return {
+      id: `SRV-${String(projId)}`,
+      serverProjId: projId,
+      accountId: String(p.Account_ID ?? accountId ?? '').trim() || undefined,
+      ownerLabel: displayName || undefined,
+      items: [],
+      laborServices: [],
+      customer,
+      paymentMethod: PaymentMethod.BANK_TRANSFER,
+      discountPercent: 0,
+      discountType: 'percentage',
+      discountValue: 0,
+      showVat: true,
+      status: mapServerStatusToQuotationStatus(p.Status),
+      total: 0,
+      createdAt: created,
+      logs: [
+        {
+          date: created,
+          note: 'Loaded from server projects/account API.',
+          user: 'System',
+        },
+      ],
+      attachments: [],
+      version: 1,
+      isDraft: false,
+    };
   };
 
   const loadEstimationInbox = useCallback(async () => {
@@ -326,6 +421,56 @@ const Dashboard: React.FC<DashboardProps> = ({
       setIsLoadingEstimations(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'pipeline') return;
+    if (userRole === 'ADMIN') return;
+    const aid = String(accountId || '').trim();
+    if (!aid) return;
+
+    let cancelled = false;
+    const run = async () => {
+      setIsLoadingPipelineServer(true);
+      try {
+        const rows = await fetchProjectsByAccount(aid);
+        if (cancelled) return;
+        const mapped = rows.map(mapServerProjectToQuote).filter(Boolean) as QuotationRecord[];
+        if (!mapped.length) return;
+
+        setSavedQuotes((prev) => {
+          const byServerId = new Map<string, QuotationRecord>();
+          for (const q of prev) {
+            if (q.serverProjId != null) byServerId.set(String(q.serverProjId), q);
+          }
+          const merged = [...prev];
+          for (const q of mapped) {
+            const key = q.serverProjId != null ? String(q.serverProjId) : '';
+            if (!key) continue;
+            const existing = byServerId.get(key);
+            if (existing) {
+              const idx = merged.findIndex((x) => x.id === existing.id);
+              if (idx >= 0) {
+                // Preserve local item details if already drafted from this server project.
+                merged[idx] = { ...q, items: existing.items, laborServices: existing.laborServices, total: existing.total || q.total };
+              }
+            } else {
+              merged.unshift(q);
+            }
+          }
+          void savePipeline(merged);
+          return merged;
+        });
+      } catch (e: any) {
+        if (!cancelled) showToast(`Failed to load server projects: ${e?.message || 'Server error'}`, 'error');
+      } finally {
+        if (!cancelled) setIsLoadingPipelineServer(false);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, userRole, accountId, displayName]);
 
   const handleDownloadEstimationFile = useCallback(async (file: EstimationFileRecord) => {
     try {
@@ -732,6 +877,7 @@ const Dashboard: React.FC<DashboardProps> = ({
     
     let augmentedText = text;
     const imageParts: { data: string; mimeType: string }[] = [];
+    let firstImageFile: File | undefined;
     
     if (files && files.length > 0) {
       for (const file of files) {
@@ -740,6 +886,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         
         if (file.type.startsWith('image/')) {
           imageParts.push({ data: base64, mimeType: file.type });
+          if (!firstImageFile) firstImageFile = file;
         } else if (file.name.match(/\.(xlsx|xls)$/i)) {
           // If it's an Excel file, parse it and add its text content to the prompt
           const excelText = await parseExcelToText(file);
@@ -751,63 +898,52 @@ const Dashboard: React.FC<DashboardProps> = ({
     setMessages(prev => [...prev, newMsg]);
 
     try {
-      const history = messages.map(m => ({
-        role: m.role,
-        parts: [{ text: m.content }]
-      }));
+      const historyLines = messages.map((m) =>
+        `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`,
+      );
+      const hasExcelContext = augmentedText.includes('CONTENT FROM EXCEL FILE');
+      const wantsStructuredExtraction = Boolean(firstImageFile || hasExcelContext);
 
-      const context = { customer, items, availableProducts: dynamicProducts };
-      // Pass the augmented text (original text + parsed excel data) to Gemini
-      const aiResponse = await processConversation(augmentedText, history, context, imageParts);
-      
-      setMessages(prev => [...prev, { role: 'model', content: aiResponse.reply }]);
+      let messageForApi = [...historyLines, `User: ${augmentedText}`].join('\n\n');
+      if (wantsStructuredExtraction) {
+        messageForApi += `\n\n${CHAT_QUOTATION_EXTRACTION_INSTRUCTION}`;
+      }
 
-      if (aiResponse.updates) {
-        const u = aiResponse.updates;
-        if (u.customerUpdate) {
-          const sanitizedUpdate = { ...u.customerUpdate };
-          
-          // Sanitize phone if present
-          if (sanitizedUpdate.phone) {
-            sanitizedUpdate.phone = sanitizedUpdate.phone.replace(/[^\d]/g, '').slice(0, 11);
-          }
-          
-          // Map client type if present (case-insensitive and partial match)
-          if (sanitizedUpdate.clientType) {
-            const ct = sanitizedUpdate.clientType.toUpperCase();
-            if (ct.includes('SYSTEM') && ct.includes('CONTRACTOR')) sanitizedUpdate.clientType = ClientType.SYSTEM_CONTRACTOR;
-            else if (ct.includes('DEALER')) sanitizedUpdate.clientType = ClientType.DEALER;
-            else if (ct.includes('END') || ct.includes('USER')) sanitizedUpdate.clientType = ClientType.END_USER;
-            else if (ct.includes('GOV')) sanitizedUpdate.clientType = ClientType.GOVERNMENT;
-          }
+      const replyText = await sendChatBotMessage(messageForApi, firstImageFile);
+      const { displayText, extraction } = parseQuotationExtractionFromAssistantReply(replyText);
+      let shown = displayText.trim();
+      if (!shown && extraction) {
+        shown = 'Applied extraction to the quotation workspace below.';
+      }
+      if (!shown) shown = replyText;
 
-          setCustomer(prev => ({ ...prev, ...sanitizedUpdate }));
-          showToast("AI updated customer details", "info");
+      setMessages((prev) => [...prev, { role: 'model', content: shown }]);
+
+      if (extraction?.customerUpdate) {
+        const customerPatch = compactCustomerPatch(extraction.customerUpdate);
+        if (Object.keys(customerPatch).length > 0) {
+          setCustomer((prev) => ({ ...prev, ...customerPatch }));
+          showToast('Customer details filled from chat extraction', 'info');
         }
-        if (u.itemsToAdd && u.itemsToAdd.length > 0) {
-          u.itemsToAdd.forEach(itemReq => {
-            const product = dynamicProducts.find(p => p.model.toLowerCase() === itemReq.model.toLowerCase() || p.name.toLowerCase() === itemReq.model.toLowerCase());
-            if (product) {
-              addItem(product, itemReq.quantity);
-              showToast(`AI added: ${product.model} (x${itemReq.quantity})`, "success");
-            }
-          });
-        }
-        if (u.paymentUpdate) {
-          const matched = Object.values(PaymentMethod).find(pm => u.paymentUpdate?.toLowerCase().includes(pm.toLowerCase()));
-          if (matched) setPaymentMethod(matched);
-        }
-        if (u.triggerPdf) {
-          if (isFormValid && items.length > 0) {
-            const newId = `PQ-FDAS-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
-            setPreviewId(newId);
-            setIsPreviewOpen(true);
+      }
+
+      if (extraction?.itemsToAdd && extraction.itemsToAdd.length > 0) {
+        const matchedLabels: string[] = [];
+        const unmatched: string[] = [];
+        for (const row of extraction.itemsToAdd) {
+          const product = matchProductFromCatalog(dynamicProducts, row.model);
+          if (product) {
+            addItem(product, row.quantity);
+            matchedLabels.push(`${product.model} ×${row.quantity}`);
           } else {
-            setMessages(prev => [...prev, { 
-              role: 'model', 
-              content: "I cannot generate the PDF yet. Please ensure all required customer details (Attention To, Email, and Tel/Mobile No.) are filled and at least one item is added to the quotation." 
-            }]);
+            unmatched.push(row.model);
           }
+        }
+        if (matchedLabels.length > 0) {
+          showToast(`Added to quotation: ${matchedLabels.join(', ')}`, 'success');
+        }
+        if (unmatched.length > 0) {
+          showToast(`No catalog match for: ${unmatched.slice(0, 5).join(', ')}${unmatched.length > 5 ? '…' : ''}`, 'info');
         }
       }
     } catch (err) {
@@ -903,6 +1039,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       isDraft: false,
       accountId: sessionAccount,
       ownerLabel: ownerShort,
+      pdfTemplateSnapshot: JSON.parse(JSON.stringify(pdfTemplate)) as PDFTemplate,
     };
 
     const pdfKey = quotationPdfContentKey;
@@ -913,29 +1050,30 @@ const Dashboard: React.FC<DashboardProps> = ({
       cachedDesigned.blob &&
       cachedDesigned.blob.size > 0;
 
-    let designedPdfBlob: Blob | undefined = reusePdf ? cachedDesigned.blob : undefined;
-    const persistP = persistQuotes([newQuote, ...savedQuotes]);
+    const nextQuotes = [newQuote, ...savedQuotes];
+    // Fast UX path: update UI immediately, then persist in background.
+    setSavedQuotes(nextQuotes);
+    void savePipeline(nextQuotes);
 
-    const genP =
-      !reusePdf && submitPipelinePrintRef.current
-        ? generateQuotationPDF(submitPipelinePrintRef.current, pdfFileSafe, { pipelineFast: true })
-            .then((pdf) => {
-              designedPdfBlob = pdf;
-              latestDesignedPdfRef.current = {
-                blob: pdf,
-                fileName: pdfFileSafe,
-                at: Date.now(),
-                contentKey: pdfKey,
-              };
-            })
-            .catch((e: any) => {
-              showToast(`Designed PDF generation failed, using fallback upload: ${e?.message || 'PDF error'}`, 'info');
-              designedPdfBlob = undefined;
-            })
-        : Promise.resolve();
-
-    await persistP;
-    await genP;
+    const designedPdfPromise: Promise<Blob | undefined> =
+      reusePdf
+        ? Promise.resolve(cachedDesigned.blob)
+        : submitPipelinePrintRef.current
+            ? generateQuotationPDF(submitPipelinePrintRef.current, pdfFileSafe, { pipelineFast: true })
+                .then((pdf) => {
+                  latestDesignedPdfRef.current = {
+                    blob: pdf,
+                    fileName: pdfFileSafe,
+                    at: Date.now(),
+                    contentKey: pdfKey,
+                  };
+                  return pdf;
+                })
+                .catch((e: any) => {
+                  showToast(`Designed PDF generation failed, using fallback upload: ${e?.message || 'PDF error'}`, 'info');
+                  return undefined;
+                })
+            : Promise.resolve(undefined);
 
     const resetReference = `PQ-FDAS-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
     const clearedCustomer: CustomerInfo = { ...INITIAL_CUSTOMER, clientType: ClientType.END_USER };
@@ -954,6 +1092,8 @@ const Dashboard: React.FC<DashboardProps> = ({
     setPdfFileName('');
     setPreviewId(resetReference);
     setSelectedQuoteId(null);
+    setSelectedEstimationFile(null);
+    setIsPreviewOpen(false);
     setActiveTab('pipeline');
 
     const uploadSnapshot = {
@@ -961,8 +1101,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       customerName: newQuote.customer.fullName || newQuote.customer.companyName,
       total: newQuote.total,
       createdAt: newQuote.createdAt,
-      pdfBlob: designedPdfBlob,
-      fileName: designedPdfBlob ? pdfFileSafe : undefined,
+      fileName: pdfFileSafe,
       accountId: sessionAccount,
       ownerLabel: ownerShort,
       customerBackendId,
@@ -998,13 +1137,14 @@ const Dashboard: React.FC<DashboardProps> = ({
 
     void (async () => {
       try {
+        const designedPdfBlob = await designedPdfPromise;
         const uploadRes = await triggerPipelineUploadHook({
           quoteId: uploadSnapshot.quoteId,
           customerName: uploadSnapshot.customerName,
           total: uploadSnapshot.total,
           createdAt: uploadSnapshot.createdAt,
-          pdfBlob: uploadSnapshot.pdfBlob,
-          fileName: uploadSnapshot.fileName,
+          pdfBlob: designedPdfBlob,
+          fileName: designedPdfBlob ? uploadSnapshot.fileName : undefined,
           accountId: uploadSnapshot.accountId,
           ownerLabel: uploadSnapshot.ownerLabel,
         });
@@ -1022,35 +1162,11 @@ const Dashboard: React.FC<DashboardProps> = ({
           });
           const projId = pickProjectIdFromSaveQuotationResponse(saveRes);
           patchQuoteServerId(projId);
-          const accountNum = Number(uploadSnapshot.accountId);
-          if (projId != null && Number.isFinite(accountNum)) {
-            try {
-              await saveProjectDetails({
-                Proj_ID: projId,
-                Account_ID: accountNum,
-                Status: 'PENDING',
-                Customer_ID: uploadSnapshot.customerBackendId ?? null,
-                Start_date: toSqlDateOnly(uploadSnapshot.createdAt),
-                FilePath: quotationFilePath != null ? String(quotationFilePath) : null,
-                deposit_amount: 0,
-                current_balance: null,
-                application: 'QOUTATION',
-                activity: `Quotation ${uploadSnapshot.quoteId}`,
-                objective: uploadSnapshot.projectFor,
-              });
-            } catch (detailsErr: any) {
-              console.warn('save/project_details:', detailsErr);
-              showToast(
-                `Project saved, but project_details failed: ${detailsErr?.message || 'Server error'}`,
-                'error',
-              );
-            }
-          }
         } catch (saveErr: any) {
           console.warn('save/quotation:', saveErr);
           showToast(`Quotation file uploaded, but project save failed: ${saveErr?.message || 'Server error'}`, 'error');
         }
-        if (!uploadSnapshot.pdfBlob) showToast('Pipeline uploaded using fallback PDF.', 'info');
+        if (!designedPdfBlob) showToast('Pipeline uploaded using fallback PDF.', 'info');
       } catch (e: any) {
         showToast(`Pipeline upload trigger failed: ${e?.message || 'Server error'}`, 'error');
       }
@@ -1180,6 +1296,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           isDraft: false,
           accountId: (accountId || '').trim() || undefined,
           ownerLabel: (displayName || '').trim() || (accountId || '').trim() || undefined,
+          pdfTemplateSnapshot: JSON.parse(JSON.stringify(pdfTemplate)) as PDFTemplate,
         };
         persistQuotes([newQuote, ...savedQuotes]);
         setItems([]); setUploadedFiles([]); setCustomer(INITIAL_CUSTOMER);
@@ -1653,9 +1770,9 @@ const Dashboard: React.FC<DashboardProps> = ({
                       onPdfFileNameChange={setPdfFileName}
                       referenceCode={previewId}
                       onReferenceCodeChange={setPreviewId}
-                      onPreview={() => { setIsPreviewOpen(true); }}
+                      onPreview={openEditablePreview}
                       onSubmit={handleSubmitPipeline}
-                      onSendEmail={async () => { setIsPreviewOpen(true); }}
+                      onSendEmail={async () => { openEditablePreview(); }}
                       clientType={customer.clientType}
                     />
                   </div>
@@ -1682,7 +1799,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                         handleAIChat("Analyze this Bill of Materials image.", [file]);
                       }} 
                     />
-                    <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-center items-center text-center gap-3 cursor-pointer group" onClick={() => { const newId = `PQ-FDAS-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`; setPreviewId(newId); setIsPreviewOpen(true); }}>
+                    <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-center items-center text-center gap-3 cursor-pointer group" onClick={() => { const newId = `PQ-FDAS-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`; setPreviewId(newId); openEditablePreview(); }}>
                        <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600 group-hover:scale-110 transition-transform">
                           <FileText size={24} />
                        </div>
@@ -1730,9 +1847,9 @@ const Dashboard: React.FC<DashboardProps> = ({
                         onPdfFileNameChange={setPdfFileName}
                         referenceCode={previewId}
                         onReferenceCodeChange={setPreviewId}
-                        onPreview={() => { setIsPreviewOpen(true); }} 
+                        onPreview={openEditablePreview} 
                         onSubmit={handleSubmitPipeline} 
-                        onSendEmail={async () => { setIsPreviewOpen(true); }} 
+                        onSendEmail={async () => { openEditablePreview(); }} 
                         clientType={customer.clientType}
                       />
                    </div>
@@ -1751,6 +1868,9 @@ const Dashboard: React.FC<DashboardProps> = ({
                 <div>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Overview</p>
                   <h2 className="text-2xl font-black text-slate-900">Quotation Pipeline</h2>
+                  {isLoadingPipelineServer && userRole !== 'ADMIN' && (
+                    <p className="mt-2 text-[11px] font-semibold text-indigo-600">Syncing projects for your account...</p>
+                  )}
                 </div>
                 <div className="flex gap-3">
                   <div className="group flex items-center bg-white border border-slate-200 rounded-2xl px-4 py-3 w-72 focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500 transition-all shadow-sm">
@@ -1878,6 +1998,8 @@ const Dashboard: React.FC<DashboardProps> = ({
               adminLogs={adminLogs} 
               currentPipeline={savedQuotes} 
               pdfTemplate={pdfTemplate}
+              accountId={accountId}
+              onToast={showToast}
               onUpdateCatalog={(products, log) => {
                 const removedProducts = dynamicProducts.filter(
                   (existing) => !products.some((next) => next.id === existing.id)
@@ -1970,7 +2092,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
       <PreviewModal 
         isOpen={isPreviewOpen} 
-        onClose={() => setIsPreviewOpen(false)} 
+        onClose={closePreview} 
         items={items} 
         customer={customer} 
         paymentMethod={paymentMethod} 
@@ -1985,10 +2107,11 @@ const Dashboard: React.FC<DashboardProps> = ({
         existingQuoteId={previewId} 
         onSendEmail={handleEmailAction} 
         onPersistPdf={handlePersistPdf}
-        template={pdfTemplate}
+        template={previewTemplateOverride || pdfTemplate}
         customFileName={pdfFileName}
         onCustomFileNameChange={setPdfFileName}
         salesAccountTag={salesAccountTag}
+        readOnly={previewReadOnly}
       />
       <PreviewModal
         headless
@@ -2044,7 +2167,11 @@ const Dashboard: React.FC<DashboardProps> = ({
             setPaymentMethod(q.paymentMethod);
             setPreviewId(q.id);
             setPdfFileName('');
-            setIsPreviewOpen(true);
+            if (q.isDraft) {
+              openEditablePreview();
+            } else {
+              openReadOnlyPreview(q.pdfTemplateSnapshot || null);
+            }
           }}
           onPromoteFromDraft={handlePromoteFromDraft}
         />

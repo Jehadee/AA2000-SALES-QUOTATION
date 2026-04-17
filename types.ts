@@ -63,6 +63,10 @@ export interface CustomerInfo {
   mobilizationDate?: string;
   siteContactName?: string;
   siteContactPhone?: string;
+  hasCustomConditions?: boolean;
+  customConditions?: { key: string; value: string }[];
+  hasCustomNoteAndRemarks?: boolean;
+  customNoteAndRemarksRows?: string[];
 }
 
 export enum PaymentMethod {
@@ -138,6 +142,8 @@ export interface QuotationRecord {
   ownerLabel?: string;
   /** Backend project row id after `save/quotation`, if returned. */
   serverProjId?: string | number;
+  /** Frozen PDF template used when this quote was submitted/saved. */
+  pdfTemplateSnapshot?: PDFTemplate;
 }
 
 export interface PDFTemplate {

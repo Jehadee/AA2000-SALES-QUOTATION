@@ -5,6 +5,7 @@ import { Trash2, MapPin, Crosshair, Search } from 'lucide-react';
 import { reverseGeocode, searchPlaces } from '../services/geocoding';
 import LocationPicker, { type LatLon } from './LocationPicker';
 import { fetchCustomers, type CustomerDirectoryItem } from '../services/customerApi';
+import TermsRichEditor from './TermsRichEditor';
 
 const DEFAULT_LOCATION: LatLon = { lat: 14.5995, lon: 120.9842 };
 
@@ -86,6 +87,92 @@ const CustomerForm: React.FC<Props> = React.memo(({ customer, setCustomer, onVal
     const val = e.target.value;
     const numericValue = val.replace(/[^\d]/g, '').slice(0, 11);
     handleChange('phone', numericValue);
+  };
+
+  const toggleCustomConditions = (checked: boolean) => {
+    setCustomer((prev) => {
+      const hasExistingCustomTerms = (prev.customConditions || []).length > 0;
+      return {
+        ...prev,
+        hasCustomConditions: checked,
+        customConditions: checked
+          ? (hasExistingCustomTerms ? prev.customConditions : [{ key: 'A', value: '' }])
+          : prev.customConditions || [],
+      };
+    });
+  };
+
+  const handleCustomConditionChange = (index: number, field: 'key' | 'value', value: string) => {
+    setCustomer((prev) => {
+      const current = prev.customConditions || [];
+      const next = [...current];
+      if (!next[index]) {
+        next[index] = { key: '', value: '' };
+      }
+      next[index] = { ...next[index], [field]: value };
+      return { ...prev, customConditions: next };
+    });
+  };
+
+  const addCustomCondition = () => {
+    setCustomer((prev) => {
+      const current = prev.customConditions || [];
+      const nextKey = String.fromCharCode(65 + current.length);
+      return {
+        ...prev,
+        customConditions: [...current, { key: nextKey, value: '' }],
+      };
+    });
+  };
+
+  const removeCustomCondition = (index: number) => {
+    setCustomer((prev) => {
+      const current = prev.customConditions || [];
+      const next = current.filter((_, i) => i !== index);
+      return {
+        ...prev,
+        customConditions: next.length > 0 ? next : [{ key: 'A', value: '' }],
+      };
+    });
+  };
+
+  const toggleCustomNoteAndRemarks = (checked: boolean) => {
+    setCustomer((prev) => {
+      const hasExistingRows = (prev.customNoteAndRemarksRows || []).length > 0;
+      return {
+        ...prev,
+        hasCustomNoteAndRemarks: checked,
+        customNoteAndRemarksRows: checked
+          ? (hasExistingRows ? prev.customNoteAndRemarksRows : [''])
+          : prev.customNoteAndRemarksRows || [],
+      };
+    });
+  };
+
+  const handleNoteAndRemarksRowChange = (index: number, value: string) => {
+    setCustomer((prev) => {
+      const current = prev.customNoteAndRemarksRows || [];
+      const next = [...current];
+      next[index] = value;
+      return { ...prev, customNoteAndRemarksRows: next };
+    });
+  };
+
+  const addNoteAndRemarksRow = () => {
+    setCustomer((prev) => ({
+      ...prev,
+      customNoteAndRemarksRows: [...(prev.customNoteAndRemarksRows || []), ''],
+    }));
+  };
+
+  const removeNoteAndRemarksRow = (index: number) => {
+    setCustomer((prev) => {
+      const next = (prev.customNoteAndRemarksRows || []).filter((_, i) => i !== index);
+      return {
+        ...prev,
+        customNoteAndRemarksRows: next.length > 0 ? next : [''],
+      };
+    });
   };
 
   const filteredCustomers = customerDirectory
@@ -557,6 +644,110 @@ const CustomerForm: React.FC<Props> = React.memo(({ customer, setCustomer, onVal
                   maxLength={11}
                 />
               </div>
+            </div>
+          )}
+        </div>
+
+        <div className="md:col-span-2 pt-4 border-t border-slate-100 space-y-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Conditions</h3>
+              <p className="text-[10px] text-slate-500 font-medium">Use this only when you want something different from the default template.</p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0">
+              <input
+                type="checkbox"
+                checked={customer.hasCustomConditions || false}
+                onChange={(e) => toggleCustomConditions(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-[1.2rem] rtl:peer-checked:after:-translate-x-[1.2rem] peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+            </label>
+          </div>
+          {customer.hasCustomConditions && (
+            <div className="space-y-3 animate-in slide-in-from-top-2 duration-300">
+              <p className="text-[10px] text-slate-500 font-medium">
+                Highlight text then use <span className="font-bold">Bold</span>, pick a color, or press <span className="font-bold">Ctrl + B</span>.
+              </p>
+              {(customer.customConditions || [{ key: 'A', value: '' }]).map((term, idx) => (
+                <div key={`custom-term-${idx}`} className="grid grid-cols-[44px_1fr_auto] gap-2 items-start">
+                  <input
+                    type="text"
+                    value={term.key}
+                    onChange={(e) => handleCustomConditionChange(idx, 'key', e.target.value)}
+                    className="w-11 p-2 text-center text-xs font-black bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-indigo-500 outline-none"
+                    placeholder="A"
+                  />
+                  <TermsRichEditor
+                    value={term.value}
+                    onChange={(html) => handleCustomConditionChange(idx, 'value', html)}
+                    className="min-h-[70px]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeCustomCondition(idx)}
+                    className="p-2 mt-1 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                    title="Remove term"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={addCustomCondition}
+                className="px-4 py-2 text-[10px] font-black uppercase tracking-wider rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 transition-colors"
+              >
+                Add Term
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="md:col-span-2 pt-4 border-t border-slate-100">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Note and Remarks</h3>
+              <p className="text-[10px] text-slate-500 font-medium">Use this only when you want something different from the default template.</p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0">
+              <input
+                type="checkbox"
+                checked={customer.hasCustomNoteAndRemarks || false}
+                onChange={(e) => toggleCustomNoteAndRemarks(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-[1.2rem] rtl:peer-checked:after:-translate-x-[1.2rem] peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+            </label>
+          </div>
+          {customer.hasCustomNoteAndRemarks && (
+            <div className="space-y-3 animate-in slide-in-from-top-2 duration-300">
+              {(customer.customNoteAndRemarksRows || ['']).map((row, idx) => (
+                <div key={`nr-row-${idx}`} className="grid grid-cols-[30px_1fr_auto] gap-2 items-start">
+                  <div className="pt-3 text-xs font-black text-slate-500 text-center">{idx + 1}</div>
+                  <textarea
+                    value={row}
+                    onChange={(e) => handleNoteAndRemarksRowChange(idx, e.target.value)}
+                    className="w-full p-3 text-sm bg-slate-50 border-2 border-slate-100 rounded-2xl focus:border-indigo-500 outline-none transition-all min-h-[70px]"
+                    placeholder="Type note / remark row..."
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeNoteAndRemarksRow(idx)}
+                    className="p-2 mt-1 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                    title="Remove row"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={addNoteAndRemarksRow}
+                className="px-4 py-2 text-[10px] font-black uppercase tracking-wider rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 transition-colors"
+              >
+                Add Row
+              </button>
             </div>
           )}
         </div>

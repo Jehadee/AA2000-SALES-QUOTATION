@@ -3,7 +3,7 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { LayoutDashboard, History, Settings, LogOut, UserCircle2, Plus, FileText, Send, Paperclip, ChevronRight, Search, Filter, Trash2 } from 'lucide-react';
 import { Product, SelectedItem, CustomerInfo, PaymentMethod, QuotationStatus, QuotationRecord, ClientType, Attachment, AdminLog, SystemBackup, FollowUpLog, PDFTemplate, UserRole, LaborService, UploadedFile } from '../types';
 import { PRODUCTS, COMPANY_DETAILS, DEFAULT_PDF_TEMPLATE, INITIAL_CUSTOMER } from '../constants';
-import { processConversation } from '../services/geminiService';
+import { sendChatBotMessage } from '../../services/chatBotApi';
 import { db, saveCatalog, savePipeline, saveAdminLogs, saveSettings, getSettings, saveCurrentAppState, getCurrentAppState } from '../services/db';
 import CustomerForm from './CustomerForm';
 import QuotationSummary from './QuotationSummary';
@@ -20,6 +20,17 @@ import { fetchProducts } from '../services/productsApi';
 import { deriveTierPricesFromBasePrice } from '../services/pricing';
 import * as XLSX from 'xlsx';
 import { fetchAllyOpportunities } from '../services/allyOpportunitiesApi';
+import {
+  compactCustomerPatch,
+  matchProductFromCatalog,
+  parseQuotationExtractionFromAssistantReply,
+} from '../../utils/quotationExtractionFromChat';
+
+const CHAT_QUOTATION_EXTRACTION_INSTRUCTION = `---QUOTATION_JSON---
+After your natural-language answer, append ONE valid JSON object (no markdown code fences) containing structured data you inferred from the document. Shape:
+{"customerUpdate":{"fullName":"","companyName":"","email":"","phone":"","address":"","projectFor":"","projectSite":"","position":"","attentionTo":"","clientType":""},"itemsToAdd":[{"model":"text as printed for SKU/model","quantity":1}]}
+Rules: Use only fields you can read. Use "" for unknown strings. clientType must be one of: SYSTEM_CONTRACTOR, END_USER, DEALER, GOVERNMENT. itemsToAdd must list each product line with quantity; "model" should match the document wording so it can be matched to the catalog.
+---END---`;
 
 interface DashboardProps {
   onLogout: () => void;
@@ -538,6 +549,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     
     let augmentedText = text;
     const imageParts: { data: string; mimeType: string }[] = [];
+    let firstImageFile: File | undefined;
     
     if (files && files.length > 0) {
       for (const file of files) {
@@ -546,6 +558,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
         
         if (file.type.startsWith('image/')) {
           imageParts.push({ data: base64, mimeType: file.type });
+          if (!firstImageFile) firstImageFile = file;
         } else if (file.name.match(/\.(xlsx|xls)$/i)) {
           // If it's an Excel file, parse it and add its text content to the prompt
           const excelText = await parseExcelToText(file);
@@ -557,63 +570,52 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     setMessages(prev => [...prev, newMsg]);
 
     try {
-      const history = messages.map(m => ({
-        role: m.role,
-        parts: [{ text: m.content }]
-      }));
+      const historyLines = messages.map((m) =>
+        `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`,
+      );
+      const hasExcelContext = augmentedText.includes('CONTENT FROM EXCEL FILE');
+      const wantsStructuredExtraction = Boolean(firstImageFile || hasExcelContext);
 
-      const context = { customer, items, availableProducts: dynamicProducts };
-      // Pass the augmented text (original text + parsed excel data) to Gemini
-      const aiResponse = await processConversation(augmentedText, history, context, imageParts);
-      
-      setMessages(prev => [...prev, { role: 'model', content: aiResponse.reply }]);
+      let messageForApi = [...historyLines, `User: ${augmentedText}`].join('\n\n');
+      if (wantsStructuredExtraction) {
+        messageForApi += `\n\n${CHAT_QUOTATION_EXTRACTION_INSTRUCTION}`;
+      }
 
-      if (aiResponse.updates) {
-        const u = aiResponse.updates;
-        if (u.customerUpdate) {
-          const sanitizedUpdate = { ...u.customerUpdate };
-          
-          // Sanitize phone if present
-          if (sanitizedUpdate.phone) {
-            sanitizedUpdate.phone = sanitizedUpdate.phone.replace(/[^\d]/g, '').slice(0, 11);
-          }
-          
-          // Map client type if present (case-insensitive and partial match)
-          if (sanitizedUpdate.clientType) {
-            const ct = sanitizedUpdate.clientType.toUpperCase();
-            if (ct.includes('SYSTEM') && ct.includes('CONTRACTOR')) sanitizedUpdate.clientType = ClientType.SYSTEM_CONTRACTOR;
-            else if (ct.includes('DEALER')) sanitizedUpdate.clientType = ClientType.DEALER;
-            else if (ct.includes('END') || ct.includes('USER')) sanitizedUpdate.clientType = ClientType.END_USER;
-            else if (ct.includes('GOV')) sanitizedUpdate.clientType = ClientType.GOVERNMENT;
-          }
+      const replyText = await sendChatBotMessage(messageForApi, firstImageFile);
+      const { displayText, extraction } = parseQuotationExtractionFromAssistantReply(replyText);
+      let shown = displayText.trim();
+      if (!shown && extraction) {
+        shown = 'Applied extraction to the quotation workspace below.';
+      }
+      if (!shown) shown = replyText;
 
-          setCustomer(prev => ({ ...prev, ...sanitizedUpdate }));
-          showToast("AI updated customer details", "info");
+      setMessages((prev) => [...prev, { role: 'model', content: shown }]);
+
+      if (extraction?.customerUpdate) {
+        const customerPatch = compactCustomerPatch(extraction.customerUpdate);
+        if (Object.keys(customerPatch).length > 0) {
+          setCustomer((prev) => ({ ...prev, ...customerPatch }));
+          showToast('Customer details filled from chat extraction', 'info');
         }
-        if (u.itemsToAdd && u.itemsToAdd.length > 0) {
-          u.itemsToAdd.forEach(itemReq => {
-            const product = dynamicProducts.find(p => p.model.toLowerCase() === itemReq.model.toLowerCase() || p.name.toLowerCase() === itemReq.model.toLowerCase());
-            if (product) {
-              addItem(product, itemReq.quantity);
-              showToast(`AI added: ${product.model} (x${itemReq.quantity})`, "success");
-            }
-          });
-        }
-        if (u.paymentUpdate) {
-          const matched = Object.values(PaymentMethod).find(pm => u.paymentUpdate?.toLowerCase().includes(pm.toLowerCase()));
-          if (matched) setPaymentMethod(matched);
-        }
-        if (u.triggerPdf) {
-          if (isFormValid && items.length > 0) {
-            const newId = `PQ-FDAS-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
-            setPreviewId(newId);
-            setIsPreviewOpen(true);
+      }
+
+      if (extraction?.itemsToAdd && extraction.itemsToAdd.length > 0) {
+        const matchedLabels: string[] = [];
+        const unmatched: string[] = [];
+        for (const row of extraction.itemsToAdd) {
+          const product = matchProductFromCatalog(dynamicProducts, row.model);
+          if (product) {
+            addItem(product, row.quantity);
+            matchedLabels.push(`${product.model} ×${row.quantity}`);
           } else {
-            setMessages(prev => [...prev, { 
-              role: 'model', 
-              content: "I cannot generate the PDF yet. Please ensure all required customer details (Attention To, Email, and Tel/Mobile No.) are filled and at least one item is added to the quotation." 
-            }]);
+            unmatched.push(row.model);
           }
+        }
+        if (matchedLabels.length > 0) {
+          showToast(`Added to quotation: ${matchedLabels.join(', ')}`, 'success');
+        }
+        if (unmatched.length > 0) {
+          showToast(`No catalog match for: ${unmatched.slice(0, 5).join(', ')}${unmatched.length > 5 ? '…' : ''}`, 'info');
         }
       }
     } catch (err) {

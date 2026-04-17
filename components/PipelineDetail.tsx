@@ -114,14 +114,14 @@ const PipelineDetail: React.FC<Props> = ({ quote, onClose, onUpdateStatus, onAdd
           {quote.status === QuotationStatus.REVIEW && (
             <>
               {secondaryBtn("Edit Quote", () => onRevise(quote))}
-              {emailBtn("Preview & Send Email", onPreviewPDF)} 
+              {emailBtn("View Saved PDF", onPreviewPDF)} 
               {primaryBtn("Mark Sent / Follow-up", () => onUpdateStatus(quote.id, QuotationStatus.FOLLOWUP))}
             </>
           )}
           
           {quote.status === QuotationStatus.NEGOTIATION && (
              <>
-               {secondaryBtn("Resend Email", onPreviewPDF)}
+               {secondaryBtn("View Saved PDF", onPreviewPDF)}
                {secondaryBtn("Revise Quote", () => onRevise(quote))}
                {successBtn("Approve / Confirm Order", () => onUpdateStatus(quote.id, QuotationStatus.ACCEPTED))}
              </>

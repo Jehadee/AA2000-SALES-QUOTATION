@@ -6,12 +6,24 @@ import * as XLSX from 'xlsx';
 import { deriveTierPricesFromBasePrice, END_USER_MARKUP, roundMoney } from '../services/pricing';
 import TermsRichEditor from './TermsRichEditor';
 import { mergeApiQuotationLogoIfEmpty, QUOTATION_LOGO_DISPLAY_WIDTH, uploadQuotationLogoFile } from '../services/quotationLogoApi';
+import {
+  addPdfTemplate,
+  applyServerTemplateToPdfTemplate,
+  fetchPdfTemplate,
+  pdfTemplateToServerData,
+  updatePdfTemplateItem,
+  type PdfTemplateCategories,
+  type PdfTemplateServerData,
+} from '../services/pdfTemplateApi';
 
 interface Props {
   currentProducts: Product[];
   adminLogs: AdminLog[];
   currentPipeline: QuotationRecord[];
   pdfTemplate: PDFTemplate;
+  /** Logged-in server Account_ID; required for PDF template API routes. */
+  accountId: string;
+  onToast?: (message: string, type?: 'success' | 'error' | 'info') => void;
   onUpdateCatalog: (newProducts: Product[], logDetails?: { type: AdminLog['type'], details: string }) => void;
   onUpdateTemplate: (template: PDFTemplate) => void;
   onReset: () => void;
@@ -58,13 +70,17 @@ const DEFAULT_META = {
   bg: 'bg-slate-50'
 };
 
-const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, currentPipeline, pdfTemplate, onUpdateCatalog, onUpdateTemplate, onReset, onImportBackup }) => {
+const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, currentPipeline, pdfTemplate, accountId, onToast, onUpdateCatalog, onUpdateTemplate, onReset, onImportBackup }) => {
   const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'template'>('catalog');
   const [pasteData, setPasteData] = useState('');
   // Sheet management states
   const [parsedPreview, setParsedPreview] = useState<Product[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isSyncingTemplate, setIsSyncingTemplate] = useState(false);
+  const [serverTemplateSnapshot, setServerTemplateSnapshot] = useState<PdfTemplateServerData | null>(null);
+  const [serverTemplateSnapshotAccId, setServerTemplateSnapshotAccId] = useState<string>('');
+  const [autoLoadedTemplateAccId, setAutoLoadedTemplateAccId] = useState<string>('');
   const [catalogSearch, setCatalogSearch] = useState('');
   const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
   const [isLogOpen, setIsLogOpen] = useState(false);
@@ -553,6 +569,265 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
     handleUpdateTemplateField('termsAndConditions', normalized);
   };
 
+  const accId = (accountId || '').trim();
+  const canUseTemplateApi = accId.length > 0;
+
+  const toast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    if (onToast) onToast(message, type);
+    else alert(message);
+  };
+
+  const mapListKeyToCategory = (
+    listKey:
+      | 'notesAndRemarks'
+      | 'warrantyPeriod'
+      | 'availability'
+      | 'termsAndConditions'
+      | 'paymentTerms'
+      | 'paymentDetails',
+  ): PdfTemplateCategories => {
+    switch (listKey) {
+      case 'notesAndRemarks':
+        return 'notes and remarks';
+      case 'warrantyPeriod':
+        return 'waranty';
+      case 'availability':
+        return 'availability';
+      case 'termsAndConditions':
+        return 'Terms and condition';
+      case 'paymentTerms':
+        return 'Payment Terms';
+      case 'paymentDetails':
+        return 'Payment Details';
+    }
+  };
+
+  const stripHtml = (html: string): string =>
+    String(html ?? '')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const handleLoadTemplateFromServer = async () => {
+    if (!canUseTemplateApi) {
+      toast('Missing Account ID. Sign in first so template can load per account.', 'error');
+      return;
+    }
+    setIsSyncingTemplate(true);
+    try {
+      const server = await fetchPdfTemplate(accId);
+      const merged = applyServerTemplateToPdfTemplate(pdfTemplate, server);
+      onUpdateTemplate(merged);
+      setServerTemplateSnapshot(server);
+      setServerTemplateSnapshotAccId(accId);
+      setAutoLoadedTemplateAccId(accId);
+      toast('Loaded PDF template from server.', 'success');
+    } catch (e: any) {
+      toast(e?.message || 'Failed to load PDF template.', 'error');
+    } finally {
+      setIsSyncingTemplate(false);
+    }
+  };
+
+  // Auto-load server template when user opens the PDF Template Editor tab.
+  useEffect(() => {
+    if (activeSubTab !== 'template') return;
+    if (!canUseTemplateApi) return;
+    if (isSyncingTemplate) return;
+
+    // Avoid reloading repeatedly for the same account.
+    if (autoLoadedTemplateAccId === accId) return;
+
+    // If user already loaded a template for this account, don't auto overwrite.
+    const hasSnapshotForThisAcc = serverTemplateSnapshot != null && serverTemplateSnapshotAccId === accId;
+    if (hasSnapshotForThisAcc) {
+      setAutoLoadedTemplateAccId(accId);
+      return;
+    }
+
+    void handleLoadTemplateFromServer();
+  }, [
+    activeSubTab,
+    accId,
+    autoLoadedTemplateAccId,
+    canUseTemplateApi,
+    isSyncingTemplate,
+    serverTemplateSnapshot,
+    serverTemplateSnapshotAccId,
+  ]);
+
+  const computeCurrentServerShape = (): PdfTemplateServerData => pdfTemplateToServerData(pdfTemplate);
+
+  const hasServerTemplateForCurrentAccount =
+    serverTemplateSnapshot != null && serverTemplateSnapshotAccId === accId;
+
+  const isTemplateDirty = (() => {
+    if (!hasServerTemplateForCurrentAccount) return false;
+    try {
+      return JSON.stringify(serverTemplateSnapshot) !== JSON.stringify(computeCurrentServerShape());
+    } catch {
+      return true;
+    }
+  })();
+
+  const canUpdateInPlace = (() => {
+    if (!hasServerTemplateForCurrentAccount) return false;
+    const current = computeCurrentServerShape();
+    const prev = serverTemplateSnapshot as PdfTemplateServerData;
+    const keys: (keyof PdfTemplateServerData)[] = [
+      'notes and remarks',
+      'Terms and condition',
+      'Payment Terms',
+      'Payment Details',
+      'waranty',
+      'availability',
+    ];
+    return keys.every((k) => (prev[k]?.length ?? 0) === (current[k]?.length ?? 0));
+  })();
+
+  const handleUpdateTemplateToServer = async () => {
+    if (!canUseTemplateApi) {
+      toast('Missing Account ID. Sign in first so template can update per account.', 'error');
+      return;
+    }
+    if (!hasServerTemplateForCurrentAccount) {
+      toast('No server template snapshot found. Click Load first or use Save to create the template.', 'error');
+      return;
+    }
+    if (!isTemplateDirty) {
+      toast('Template is already up to date.', 'info');
+      return;
+    }
+    if (!canUpdateInPlace) {
+      // update-item cannot insert/remove lines (index must already exist on the server).
+      // When list lengths changed, overwrite the whole server template via POST.
+      setIsSyncingTemplate(true);
+      try {
+        const current = computeCurrentServerShape();
+        console.log('[PDF TEMPLATE UPDATE] acc_ID:', accId);
+        console.log('[PDF TEMPLATE UPDATE] list lengths changed; overwriting via POST add/PDF-Template', current);
+        await addPdfTemplate(accId, pdfTemplate);
+        setServerTemplateSnapshot(current);
+        setServerTemplateSnapshotAccId(accId);
+        toast('Template overwritten on server (rows changed).', 'success');
+      } catch (e: any) {
+        toast(e?.message || 'Failed to overwrite template.', 'error');
+      } finally {
+        setIsSyncingTemplate(false);
+      }
+      return;
+    }
+
+    const prev = serverTemplateSnapshot as PdfTemplateServerData;
+    const current = computeCurrentServerShape();
+    const updates: { category: PdfTemplateCategories; index: number; newValue: string }[] = [];
+
+    const pushDiffs = (category: PdfTemplateCategories, a: string[], b: string[]) => {
+      for (let i = 0; i < Math.max(a.length, b.length); i++) {
+        const before = String(a[i] ?? '').trim();
+        const after = String(b[i] ?? '').trim();
+        if (before !== after) updates.push({ category, index: i, newValue: after });
+      }
+    };
+
+    pushDiffs('notes and remarks', prev['notes and remarks'], current['notes and remarks']);
+    pushDiffs('Terms and condition', prev['Terms and condition'], current['Terms and condition']);
+    pushDiffs('Payment Terms', prev['Payment Terms'], current['Payment Terms']);
+    pushDiffs('Payment Details', prev['Payment Details'], current['Payment Details']);
+    pushDiffs('waranty', prev.waranty, current.waranty);
+    pushDiffs('availability', prev.availability, current.availability);
+
+    if (updates.length === 0) {
+      setServerTemplateSnapshot(current);
+      setServerTemplateSnapshotAccId(accId);
+      toast('Template is already up to date.', 'info');
+      return;
+    }
+
+    setIsSyncingTemplate(true);
+    try {
+      console.log('[PDF TEMPLATE UPDATE] acc_ID:', accId);
+      console.log('[PDF TEMPLATE UPDATE] changed items:', updates);
+      for (const u of updates) {
+        await updatePdfTemplateItem({ accId, category: u.category, index: u.index, newValue: u.newValue });
+      }
+      setServerTemplateSnapshot(current);
+      setServerTemplateSnapshotAccId(accId);
+      toast(`Updated ${updates.length} item(s) on server.`, 'success');
+    } catch (e: any) {
+      toast(e?.message || 'Failed to update template.', 'error');
+    } finally {
+      setIsSyncingTemplate(false);
+    }
+  };
+
+  const handleSaveTemplateToServer = async () => {
+    if (!canUseTemplateApi) {
+      toast('Missing Account ID. Sign in first so template can save per account.', 'error');
+      return;
+    }
+    setIsSyncingTemplate(true);
+    try {
+      // If we already have a server snapshot for this acc_ID and the user changed entries,
+      // prefer PUT update-item to avoid rewriting the whole file.
+      if (hasServerTemplateForCurrentAccount && isTemplateDirty) {
+        await handleUpdateTemplateToServer();
+        return;
+      }
+
+      const payloadForLog = computeCurrentServerShape();
+
+      // For debugging: see exactly what the backend receives.
+      console.log('[PDF TEMPLATE SAVE] acc_ID:', accId);
+      console.log('[PDF TEMPLATE SAVE] payload:', payloadForLog);
+
+      await addPdfTemplate(accId, pdfTemplate);
+      setServerTemplateSnapshot(payloadForLog);
+      setServerTemplateSnapshotAccId(accId);
+      toast('Saved PDF template to server.', 'success');
+    } catch (e: any) {
+      toast(e?.message || 'Failed to save PDF template.', 'error');
+    } finally {
+      setIsSyncingTemplate(false);
+    }
+  };
+
+  const handleUpdateSingleTemplateItem = async (params: {
+    listKey:
+      | 'notesAndRemarks'
+      | 'warrantyPeriod'
+      | 'availability'
+      | 'termsAndConditions'
+      | 'paymentTerms'
+      | 'paymentDetails';
+    index: number;
+    value: string;
+  }) => {
+    if (!canUseTemplateApi) {
+      toast('Missing Account ID. Sign in first so template can update per account.', 'error');
+      return;
+    }
+    const newValue = String(params.value ?? '').trim();
+    if (!newValue) {
+      toast('Cannot update an empty value.', 'error');
+      return;
+    }
+    setIsSyncingTemplate(true);
+    try {
+      await updatePdfTemplateItem({
+        accId,
+        category: mapListKeyToCategory(params.listKey),
+        index: params.index,
+        newValue,
+      });
+      toast('Updated item on server.', 'success');
+    } catch (e: any) {
+      toast(e?.message || 'Failed to update item.', 'error');
+    } finally {
+      setIsSyncingTemplate(false);
+    }
+  };
+
   return (
     <>
       {/* Custom Delete Confirmation Modal */}
@@ -886,6 +1161,51 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
               <div className="flex flex-col gap-4 w-full md:w-auto">
                 <input type="file" ref={logoInputRef} onChange={handleLogoUpload} className="hidden" accept="image/*" />
                 
+                {/* Server sync controls (per Account_ID) */}
+                <div className="bg-white border border-slate-200 rounded-2xl px-6 py-4 shadow-sm">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Template Account</div>
+                      <div className="mt-1 text-[11px] font-black text-slate-900 truncate" title={accId || 'Missing'}>
+                        {accId ? `ACC_ID: ${accId}` : 'Missing Account ID'}
+                      </div>
+                      <div className="mt-1 text-[9px] text-slate-500">
+                        {accId ? 'Save/Update will apply to this account.' : 'Sign in first to enable template API.'}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => void handleLoadTemplateFromServer()}
+                        disabled={!canUseTemplateApi || isSyncingTemplate}
+                        className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                        title="Load template from server"
+                      >
+                        {isSyncingTemplate ? 'Loading…' : 'Load'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void (hasServerTemplateForCurrentAccount && isTemplateDirty
+                            ? handleUpdateTemplateToServer()
+                            : handleSaveTemplateToServer())
+                        }
+                        disabled={!canUseTemplateApi || isSyncingTemplate}
+                        className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-indigo-600 text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700 disabled:opacity-50"
+                        title="Save full template to server"
+                      >
+                        {isSyncingTemplate
+                          ? 'Saving…'
+                          : hasServerTemplateForCurrentAccount
+                            ? isTemplateDirty
+                              ? 'Update'
+                              : 'Saved'
+                            : 'Save'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {/* Name Styling Controls */}
                   <div className="flex items-center justify-between gap-4 bg-white border border-slate-200 rounded-2xl px-6 py-3 shadow-sm">
@@ -1130,6 +1450,23 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                             target.style.height = target.scrollHeight + 'px';
                           }}
                         />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleUpdateSingleTemplateItem({
+                              listKey: 'notesAndRemarks',
+                              index: idx,
+                              value: note,
+                            })
+                          }
+                          disabled={!canUseTemplateApi || isSyncingTemplate}
+                          className="opacity-0 group-hover:opacity-100 p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-all disabled:opacity-50"
+                          title="Update this note on server"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </button>
                         <button onClick={() => handleRemoveListItem('notesAndRemarks', idx)} className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-50 rounded transition-all">
                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
                         </button>
@@ -1165,6 +1502,23 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                           className="flex-1"
                         />
                         <button
+                          type="button"
+                          onClick={() =>
+                            void handleUpdateSingleTemplateItem({
+                              listKey: 'termsAndConditions',
+                              index: idx,
+                              value: stripHtml(term.value),
+                            })
+                          }
+                          disabled={!canUseTemplateApi || isSyncingTemplate}
+                          className="opacity-0 group-hover:opacity-100 p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-all mt-1 disabled:opacity-50"
+                          title="Update this term on server"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </button>
+                        <button
                           onClick={() => handleRemoveTermConditionRow(idx)}
                           className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-50 rounded transition-all mt-1"
                           title="Remove terms row"
@@ -1183,20 +1537,115 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                     <div className="p-3 space-y-2">
                       <div className="flex flex-col">
                         <label className="text-[7pt] font-black text-slate-400 uppercase mb-1">Supply of Devices</label>
-                        <input type="text" value={pdfTemplate.paymentTerms.supplyOfDevices} onChange={(e) => handleUpdateTemplateField('paymentTerms.supplyOfDevices', e.target.value)} className="bg-transparent border-b border-slate-200 outline-none text-[8pt] font-bold uppercase" />
+                        <div className="flex items-center gap-2">
+                          <input type="text" value={pdfTemplate.paymentTerms.supplyOfDevices} onChange={(e) => handleUpdateTemplateField('paymentTerms.supplyOfDevices', e.target.value)} className="flex-1 bg-transparent border-b border-slate-200 outline-none text-[8pt] font-bold uppercase" />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleUpdateSingleTemplateItem({
+                                listKey: 'paymentTerms',
+                                index: 0,
+                                value: pdfTemplate.paymentTerms.supplyOfDevices,
+                              })
+                            }
+                            disabled={!canUseTemplateApi || isSyncingTemplate}
+                            className="p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-all disabled:opacity-50"
+                            title="Update this payment term on server"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                            </svg>
+                          </button>
+                        </div>
                       </div>
                       <div className="flex flex-col">
                         <label className="text-[7pt] font-black text-slate-400 uppercase mb-1">Supply of Labor</label>
-                        <input type="text" value={pdfTemplate.paymentTerms.supplyOfLabor} onChange={(e) => handleUpdateTemplateField('paymentTerms.supplyOfLabor', e.target.value)} className="bg-transparent border-b border-slate-200 outline-none text-[8pt] font-bold uppercase" />
+                        <div className="flex items-center gap-2">
+                          <input type="text" value={pdfTemplate.paymentTerms.supplyOfLabor} onChange={(e) => handleUpdateTemplateField('paymentTerms.supplyOfLabor', e.target.value)} className="flex-1 bg-transparent border-b border-slate-200 outline-none text-[8pt] font-bold uppercase" />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleUpdateSingleTemplateItem({
+                                listKey: 'paymentTerms',
+                                index: 1,
+                                value: pdfTemplate.paymentTerms.supplyOfLabor,
+                              })
+                            }
+                            disabled={!canUseTemplateApi || isSyncingTemplate}
+                            className="p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-all disabled:opacity-50"
+                            title="Update this payment term on server"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                            </svg>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
                   <div className="border border-black">
                     <div className="bg-slate-100 px-3 py-1 border-b border-black text-[8pt] font-black uppercase">Payment Details</div>
                     <div className="p-3 space-y-2">
-                      <input type="text" value={pdfTemplate.paymentDetails.bankName} onChange={(e) => handleUpdateTemplateField('paymentDetails.bankName', e.target.value)} placeholder="Bank Name" className="w-full bg-transparent border-b border-slate-200 outline-none text-[8pt] font-bold uppercase" />
-                      <input type="text" value={pdfTemplate.paymentDetails.accountNumber} onChange={(e) => handleUpdateTemplateField('paymentDetails.accountNumber', e.target.value)} placeholder="Account Number" className="w-full bg-transparent border-b border-slate-200 outline-none text-[8pt] font-bold uppercase" />
-                      <input type="text" value={pdfTemplate.paymentDetails.accountName} onChange={(e) => handleUpdateTemplateField('paymentDetails.accountName', e.target.value)} placeholder="Account Name" className="w-full bg-transparent border-b border-slate-200 outline-none text-[8pt] font-bold uppercase" />
+                      <div className="flex items-center gap-2">
+                        <input type="text" value={pdfTemplate.paymentDetails.bankName} onChange={(e) => handleUpdateTemplateField('paymentDetails.bankName', e.target.value)} placeholder="Bank Name" className="flex-1 bg-transparent border-b border-slate-200 outline-none text-[8pt] font-bold uppercase" />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleUpdateSingleTemplateItem({
+                              listKey: 'paymentDetails',
+                              index: 0,
+                              value: pdfTemplate.paymentDetails.bankName,
+                            })
+                          }
+                          disabled={!canUseTemplateApi || isSyncingTemplate}
+                          className="p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-all disabled:opacity-50"
+                          title="Update this payment detail on server"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input type="text" value={pdfTemplate.paymentDetails.accountNumber} onChange={(e) => handleUpdateTemplateField('paymentDetails.accountNumber', e.target.value)} placeholder="Account Number" className="flex-1 bg-transparent border-b border-slate-200 outline-none text-[8pt] font-bold uppercase" />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleUpdateSingleTemplateItem({
+                              listKey: 'paymentDetails',
+                              index: 1,
+                              value: pdfTemplate.paymentDetails.accountNumber,
+                            })
+                          }
+                          disabled={!canUseTemplateApi || isSyncingTemplate}
+                          className="p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-all disabled:opacity-50"
+                          title="Update this payment detail on server"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input type="text" value={pdfTemplate.paymentDetails.accountName} onChange={(e) => handleUpdateTemplateField('paymentDetails.accountName', e.target.value)} placeholder="Account Name" className="flex-1 bg-transparent border-b border-slate-200 outline-none text-[8pt] font-bold uppercase" />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleUpdateSingleTemplateItem({
+                              listKey: 'paymentDetails',
+                              index: 2,
+                              value: pdfTemplate.paymentDetails.accountName,
+                            })
+                          }
+                          disabled={!canUseTemplateApi || isSyncingTemplate}
+                          className="p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-all disabled:opacity-50"
+                          title="Update this payment detail on server"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1224,6 +1673,23 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                               target.style.height = target.scrollHeight + 'px';
                             }}
                           />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleUpdateSingleTemplateItem({
+                                listKey: 'warrantyPeriod',
+                                index: i,
+                                value: w,
+                              })
+                            }
+                            disabled={!canUseTemplateApi || isSyncingTemplate}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-all disabled:opacity-50"
+                            title="Update this warranty item on server"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                            </svg>
+                          </button>
                           <button onClick={() => handleRemoveListItem('warrantyPeriod', i)} className="opacity-0 group-hover:opacity-100 text-red-500"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg></button>
                         </div>
                       ))}
@@ -1250,6 +1716,23 @@ const AdminPanel: React.FC<Props> = React.memo(({ currentProducts, adminLogs, cu
                               target.style.height = target.scrollHeight + 'px';
                             }}
                           />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleUpdateSingleTemplateItem({
+                                listKey: 'availability',
+                                index: i,
+                                value: a,
+                              })
+                            }
+                            disabled={!canUseTemplateApi || isSyncingTemplate}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-all disabled:opacity-50"
+                            title="Update this availability item on server"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                            </svg>
+                          </button>
                           <button onClick={() => handleRemoveListItem('availability', i)} className="opacity-0 group-hover:opacity-100 text-red-500"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg></button>
                         </div>
                       ))}

@@ -43,7 +43,11 @@ export const INITIAL_CUSTOMER: CustomerInfo = {
   laborCost: 0,
   mobilizationDate: '',
   siteContactName: '',
-  siteContactPhone: ''
+  siteContactPhone: '',
+  hasCustomConditions: false,
+  customConditions: [],
+  hasCustomNoteAndRemarks: false,
+  customNoteAndRemarksRows: []
 };
 
 export const DEFAULT_PDF_TEMPLATE: PDFTemplate = {

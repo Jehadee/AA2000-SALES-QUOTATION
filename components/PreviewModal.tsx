@@ -28,11 +28,13 @@ interface Props {
   printRefOverride?: React.RefObject<HTMLDivElement | null>;
   /** Shown on PDF (e.g. prepared-by line tied to logged-in sales account). */
   salesAccountTag?: string;
+  /** Read-only view mode for pipeline-saved PDFs (view/print/download only). */
+  readOnly?: boolean;
 }
 
 const PreviewModal: React.FC<Props> = ({ 
   isOpen, onClose, items, customer, paymentMethod, subtotal, laborCost = 0, vat, discountAmount, discountValue = 0, discountType = 'percentage', total, showVat, onSendEmail, existingQuoteId, template,
-  customFileName, onCustomFileNameChange, onPersistPdf, headless = false, printRefOverride, salesAccountTag
+  customFileName, onCustomFileNameChange, onPersistPdf, headless = false, printRefOverride, salesAccountTag, readOnly = false
 }) => {
   const printRef = useRef<HTMLDivElement>(null);
   const effectivePrintRef = printRefOverride ?? printRef;
@@ -140,6 +142,24 @@ const PreviewModal: React.FC<Props> = ({
     [showVat, effectiveNetTotal, effectiveVat]
   );
 
+  const effectiveConditions = React.useMemo(() => {
+    if (customer.hasCustomConditions && (customer.customConditions || []).length > 0) {
+      return (customer.customConditions || []).filter(
+        (term) => (term.key || '').trim() || (term.value || '').trim()
+      );
+    }
+    return template.termsAndConditions;
+  }, [customer.hasCustomConditions, customer.customConditions, template.termsAndConditions]);
+
+  const effectiveNoteAndRemarksRows = React.useMemo(() => {
+    if (customer.hasCustomNoteAndRemarks) {
+      return (customer.customNoteAndRemarksRows || []).map((row) => row.trim()).filter(Boolean);
+    }
+    return [];
+  }, [customer.hasCustomNoteAndRemarks, customer.customNoteAndRemarksRows]);
+
+  const showDefaultTemplateNotes = !customer.hasCustomNoteAndRemarks || effectiveNoteAndRemarksRows.length === 0;
+
   if (!isOpen && !headless) return null;
   
   return (
@@ -151,6 +171,9 @@ const PreviewModal: React.FC<Props> = ({
           <div className="text-center sm:text-left">
             <h2 className="text-lg sm:text-xl font-black text-slate-900 uppercase tracking-tight">Document Preview</h2>
             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{quotationNo}</p>
+            {readOnly && (
+              <p className="text-[9px] text-slate-500 font-semibold mt-0.5 uppercase tracking-wide">Read-only saved pipeline PDF</p>
+            )}
             {salesAccountTag && (
               <p className="text-[9px] text-slate-500 font-semibold mt-0.5">{salesAccountTag}</p>
             )}
@@ -171,11 +194,13 @@ const PreviewModal: React.FC<Props> = ({
           </div>
 
           <div className="flex items-center gap-2 w-full sm:w-auto justify-center sm:justify-end">
-            <button onClick={handleSendEmail} disabled={isSending || isExporting} className="flex-1 sm:flex-none justify-center px-4 py-3 sm:py-2.5 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center gap-2">
-              {isSending ? 'Sending...' : 'Email PDF'}
-            </button>
+            {!readOnly && (
+              <button onClick={handleSendEmail} disabled={isSending || isExporting} className="flex-1 sm:flex-none justify-center px-4 py-3 sm:py-2.5 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center gap-2">
+                {isSending ? 'Sending...' : 'Email PDF'}
+              </button>
+            )}
             <button onClick={handleDownload} disabled={isExporting || isSending} className="flex-1 sm:flex-none justify-center px-4 py-3 sm:py-2.5 bg-slate-900 text-white rounded-xl font-black uppercase text-[10px] hover:bg-slate-800 transition-colors disabled:opacity-50 flex items-center gap-2">
-              {isExporting ? 'Processing...' : 'Download'}
+              {isExporting ? 'Processing...' : (readOnly ? 'Download / Print' : 'Download')}
             </button>
             <button onClick={onClose} className="p-3 bg-slate-100 hover:bg-slate-200 rounded-full transition-all active:scale-90">
               <svg className="w-6 h-6 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
@@ -444,17 +469,33 @@ const PreviewModal: React.FC<Props> = ({
 
 
 
-                <div className="mt-6 border border-black">
-                  <div className="bg-[#FFFF00] text-center text-black font-black text-[8pt] border-b border-black py-1 uppercase tracking-widest">NOTE AND REMARKS: ALL INDICATED BELOW SHALL BE BILLED SEPARATELY</div>
-                  <div className="p-2 space-y-1">
-                    {template.notesAndRemarks.map((note, idx) => (
-                      <div key={idx} className="grid grid-cols-[24px_1fr] gap-1 text-[7.2pt] font-bold uppercase text-slate-800 leading-[1.45]">
-                        <span className="text-center shrink-0 leading-[1.45]">{idx + 1}</span>
-                        <span className="whitespace-pre-wrap break-words leading-[1.45]">{note}</span>
-                      </div>
-                    ))}
+                {showDefaultTemplateNotes && (
+                  <div className="mt-6 border border-black">
+                    <div className="bg-[#FFFF00] text-center text-black font-black text-[8pt] border-b border-black py-1 uppercase tracking-widest">NOTE AND REMARKS: ALL INDICATED BELOW SHALL BE BILLED SEPARATELY</div>
+                    <div className="p-2 space-y-1">
+                      {template.notesAndRemarks.map((note, idx) => (
+                        <div key={idx} className="grid grid-cols-[24px_1fr] gap-1 text-[7.2pt] font-bold uppercase text-slate-800 leading-[1.45]">
+                          <span className="text-center shrink-0 leading-[1.45]">{idx + 1}</span>
+                          <span className="whitespace-pre-wrap break-words leading-[1.45]">{note}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {effectiveNoteAndRemarksRows.length > 0 && (
+                  <div className="mt-6 border border-black">
+                    <div className="bg-[#FFFF00] text-center text-black font-black text-[8pt] border-b border-black py-1 uppercase tracking-widest">NOTE AND REMARKS: ALL INDICATED BELOW SHALL BE BILLED SEPARATELY</div>
+                    <div className="p-2 space-y-1">
+                      {effectiveNoteAndRemarksRows.map((row, idx) => (
+                        <div key={idx} className="grid grid-cols-[24px_1fr] gap-1 text-[7.2pt] font-bold uppercase text-slate-800 leading-[1.45]">
+                          <span className="text-center shrink-0 leading-[1.45]">{idx + 1}</span>
+                          <span className="whitespace-pre-wrap break-words leading-[1.45]">{row}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
             {/* PDF-FOOTER SECTION */}
@@ -463,7 +504,7 @@ const PreviewModal: React.FC<Props> = ({
                 <div className="bg-[#C5D4E0] text-center font-bold text-[9pt] border-b border-black py-2 uppercase tracking-wide text-neutral-900">
                   TERMS AND CONDITIONS
                 </div>
-                {template.termsAndConditions.map((term, idx) => (
+                {effectiveConditions.map((term, idx) => (
                   <div
                     key={idx}
                     className="grid grid-cols-[32px_1fr] border-b border-black last:border-b-0 text-[7.2pt] leading-[1.5] text-neutral-900"

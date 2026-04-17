@@ -24,7 +24,7 @@ View your app in AI Studio: https://ai.studio/apps/dabb6d3d-3ba6-4abc-b436-4a0c3
 
    | Name | Value | Notes |
    |------|--------|--------|
-   | `VITE_API_BASE_URL` | Your backend URL (e.g. `https://your-api.vercel.app` or devtunnels URL) | Required for customers & products API |
+   | `SERVER_API_URL` | Your backend URL (e.g. `https://your-api.vercel.app` or devtunnels URL) | Required for customers & products API |
    | `VITE_API_BASE_PATH` | `/api` or leave empty | Optional; used for products path |
    | `GEMINI_API_KEY` | Your Gemini API key | Required for AI assistant |
 

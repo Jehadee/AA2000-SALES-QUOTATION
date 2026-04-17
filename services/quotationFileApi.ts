@@ -34,6 +34,26 @@ export type SaveQuotationProjectPayload = {
   objective?: string | null;
 };
 
+export type AccountProjectsResponseRow = {
+  Proj_ID?: string | number;
+  proj_ID?: string | number;
+  Account_ID?: string | number;
+  Customer_ID?: string | number | null;
+  Start_date?: string | null;
+  FilePath?: string | null;
+  Status?: string | null;
+  activity?: string | null;
+  objective?: string | null;
+  customerFullName?: string | null;
+  Customer?: {
+    cus_ID?: string | number;
+    cus_fname?: string | null;
+    cus_mname?: string | null;
+    cus_lname?: string | null;
+    company_name?: string | null;
+  } | null;
+};
+
 /** Aligns with DB table `project_details` (see project_details.sql). */
 export type SaveProjectDetailsPayload = {
   Proj_ID: string | number;
@@ -78,18 +98,23 @@ function getUploadQuotationUrl(): string {
     const p = override.trim().startsWith('/') ? override.trim() : `/${override.trim()}`;
     return `${baseClean}${p}`;
   }
-  // Default route from backend router mount
-  return `${baseClean}/service/estimation/upload/qoutationFile`;
+  // Default route from backend router mount (quotation service)
+  return `${baseClean}/service/quotation/post/upload/quotationFile`;
 }
 
 export async function uploadQuotationFile(pdfBlob: Blob, fileName: string): Promise<UploadQuotationResponse> {
   const primaryUrl = getUploadQuotationUrl();
   const formData = new FormData();
   formData.append('file', pdfBlob, fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`);
-  // Fallback for older mount path used in some environments.
-  const fallbackLegacyUrl = primaryUrl.includes('/service/estimation/upload/qoutationFile')
-    ? primaryUrl.replace('/service/estimation/upload/qoutationFile', '/upload/qoutationFile')
-    : '';
+  // Fallbacks for varied backend mounts / typos across environments.
+  const fallbacks = [
+    // Legacy root mount
+    primaryUrl.replace(/\/service\/quotation\/post\/upload\/quotationFile$/i, '/upload/quotationFile'),
+    // Common typo seen in deployments
+    primaryUrl.replace(/quotationFile$/i, 'qoutationFile'),
+    primaryUrl.replace(/\/service\/quotation\/post\/upload\/quotationFile$/i, '/service/quotation/post/upload/qoutationFile'),
+    primaryUrl.replace(/\/service\/quotation\/post\/upload\/quotationFile$/i, '/upload/qoutationFile'),
+  ].filter((u) => u && u !== primaryUrl);
 
   let res: Response;
   try {
@@ -98,13 +123,28 @@ export async function uploadQuotationFile(pdfBlob: Blob, fileName: string): Prom
       body: formData,
     });
   } catch (networkErr) {
-    if (!fallbackLegacyUrl) throw networkErr;
-    res = await fetch(fallbackLegacyUrl, { method: 'POST', body: formData });
+    // Network error — try fallbacks
+    let lastErr = networkErr;
+    for (const fb of fallbacks) {
+      try {
+        res = await fetch(fb, { method: 'POST', body: formData });
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (lastErr) throw lastErr;
   }
 
-  if (!res.ok && fallbackLegacyUrl) {
-    const retry = await fetch(fallbackLegacyUrl, { method: 'POST', body: formData });
-    if (retry.ok) res = retry;
+  if (!res.ok) {
+    for (const fb of fallbacks) {
+      const retry = await fetch(fb, { method: 'POST', body: formData });
+      if (retry.ok) {
+        res = retry;
+        break;
+      }
+    }
   }
 
   const contentType = res.headers.get('content-type') || '';
@@ -127,7 +167,7 @@ function getSubmitPipelineTriggerUrl(): string {
     const p = override.trim().startsWith('/') ? override.trim() : `/${override.trim()}`;
     return `${baseClean}${p}`;
   }
-  return `${baseClean}/service/quotation/post/upload/qoutationFile`;
+  return `${baseClean}/service/quotation/post/upload/quotationFile`;
 }
 
 function getSaveQuotationProjectUrl(): string {
@@ -140,6 +180,21 @@ function getSaveQuotationProjectUrl(): string {
   }
   // Backend router mounts this under /project (see devtunnel 404 when using /save/quotation alone).
   return `${baseClean}/project/save/quotation`;
+}
+
+function getProjectsByAccountUrl(accountId: string): string {
+  const base = getNormalizedApiBaseUrl();
+  const override = (import.meta as any).env?.VITE_PROJECTS_BY_ACCOUNT_PATH as string | undefined;
+  const baseClean = base.replace(/\/+$/, '');
+  if (override && override.trim()) {
+    const tpl = override.trim();
+    const withId = tpl.includes('{accountId}')
+      ? tpl.replace('{accountId}', encodeURIComponent(accountId))
+      : `${tpl.replace(/\/+$/, '')}/${encodeURIComponent(accountId)}`;
+    const p = withId.startsWith('/') ? withId : `/${withId}`;
+    return `${baseClean}${p}`;
+  }
+  return `${baseClean}/service/quotation/get/projects/account/${encodeURIComponent(accountId)}`;
 }
 
 function getSaveProjectDetailsUrl(): string {
@@ -191,6 +246,28 @@ export async function saveQuotationProject(body: SaveQuotationProjectPayload): P
   return data;
 }
 
+export async function fetchProjectsByAccount(accountId: string): Promise<AccountProjectsResponseRow[]> {
+  const url = getProjectsByAccountUrl(accountId);
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+  });
+  const contentType = res.headers.get('content-type') || '';
+  const isJson = contentType.includes('application/json');
+  const data = isJson ? await res.json() : await res.text();
+
+  if (!res.ok) {
+    // Backend returns 404 + empty array when no data; treat as empty instead of hard error.
+    if (res.status === 404) return [];
+    const msg =
+      typeof data === 'string' ? data : (data as any)?.message || `Fetch projects/account failed (${res.status})`;
+    throw new Error(msg);
+  }
+
+  const rows = (data as any)?.data;
+  return Array.isArray(rows) ? (rows as AccountProjectsResponseRow[]) : [];
+}
+
 /**
  * Inserts/updates `project_details` for a project (e.g. after pipeline submit).
  * Backend should accept the same keys as the Sequelize / SQL columns.
@@ -214,7 +291,15 @@ export async function saveProjectDetails(body: SaveProjectDetailsPayload): Promi
 }
 
 export async function triggerPipelineUploadHook(payload: PipelineUploadTriggerPayload): Promise<UploadQuotationResponse | null> {
-  const url = getSubmitPipelineTriggerUrl();
+  const primaryUrl = getSubmitPipelineTriggerUrl();
+  const fallbacks = [
+    // Legacy root mount
+    primaryUrl.replace(/\/service\/quotation\/post\/upload\/quotationFile$/i, '/upload/quotationFile'),
+    // Common typo seen in deployments
+    primaryUrl.replace(/quotationFile$/i, 'qoutationFile'),
+    primaryUrl.replace(/\/service\/quotation\/post\/upload\/quotationFile$/i, '/service/quotation/post/upload/qoutationFile'),
+    primaryUrl.replace(/\/service\/quotation\/post\/upload\/quotationFile$/i, '/upload/qoutationFile'),
+  ].filter((u) => u && u !== primaryUrl);
   let pdfBlob: Blob;
   if (payload.pdfBlob) {
     pdfBlob = payload.pdfBlob;
@@ -255,10 +340,16 @@ export async function triggerPipelineUploadHook(payload: PipelineUploadTriggerPa
   }
   if (payload.ownerLabel) formData.append('ownerLabel', payload.ownerLabel);
 
-  const res = await fetch(url, {
-    method: 'POST',
-    body: formData,
-  });
+  let res = await fetch(primaryUrl, { method: 'POST', body: formData });
+  if (!res.ok) {
+    for (const fb of fallbacks) {
+      const retry = await fetch(fb, { method: 'POST', body: formData });
+      if (retry.ok) {
+        res = retry;
+        break;
+      }
+    }
+  }
   if (!res.ok) {
     const txt = await res.text();
     throw new Error(txt || `Pipeline upload trigger failed (${res.status})`);

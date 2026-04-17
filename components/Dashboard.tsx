@@ -32,9 +32,11 @@ import ExcelImporter from './ExcelImporter';
 import AIChat from './AIChat';
 import { sendQuotationEmail } from '../services/emailService';
 import { blobToBase64, generateQuotationPDF } from '../services/pdfService';
+import { addCustomer, extractCustomerIdFromAddResponse } from '../services/customerApi';
 import {
   fetchProjectsByAccount,
   type AccountProjectsResponseRow,
+  deleteQuotationProject,
   triggerPipelineUploadHook,
   uploadQuotationFile,
   saveQuotationProject,
@@ -372,6 +374,13 @@ const Dashboard: React.FC<DashboardProps> = ({
     const companyName = String(p.Customer?.company_name ?? '').trim();
     const objective = String(p.objective ?? '').trim();
     const activity = String(p.activity ?? '').trim();
+    const balanceRaw = (p as any).current_balance;
+    const balance =
+      typeof balanceRaw === 'number'
+        ? balanceRaw
+        : typeof balanceRaw === 'string'
+          ? Number(balanceRaw)
+          : 0;
     const customer: CustomerInfo = {
       ...INITIAL_CUSTOMER,
       fullName,
@@ -392,7 +401,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       discountValue: 0,
       showVat: true,
       status: mapServerStatusToQuotationStatus(p.Status),
-      total: 0,
+      total: Number.isFinite(balance) ? balance : 0,
       createdAt: created,
       logs: [
         {
@@ -995,8 +1004,22 @@ const Dashboard: React.FC<DashboardProps> = ({
       return;
     }
 
-    // Do NOT auto-create customer on submit; only use an existing selected customer id if present.
-    const customerBackendId: string | undefined = selectedExistingCustomerId || undefined;
+    // Customer ID logic:
+    // - If user selected an existing customer from directory: reuse its id (avoid duplicates)
+    // - Else: create the customer and use the returned id for saving the quotation project
+    let customerBackendId: string | undefined = selectedExistingCustomerId || undefined;
+    if (!customerBackendId) {
+      try {
+        const addRes = await addCustomer(customer);
+        customerBackendId = extractCustomerIdFromAddResponse(addRes);
+        if (!customerBackendId) {
+          throw new Error('Customer was created but no customer ID was returned.');
+        }
+      } catch (e: any) {
+        showToast(`Submit failed: ${e?.message || 'Could not create customer on server'}`, 'error');
+        return;
+      }
+    }
 
     const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
     const laborCost = customer.hasLabor ? (customer.laborCost || 0) : 0;
@@ -1154,6 +1177,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             quotationFilePath: quotationFilePath != null ? String(quotationFilePath) : null,
             activity: `Quotation ${uploadSnapshot.quoteId}`,
             objective: uploadSnapshot.projectFor,
+            amount: uploadSnapshot.total,
           });
           const projId = pickProjectIdFromSaveQuotationResponse(saveRes);
           patchQuoteServerId(projId);
@@ -1959,7 +1983,24 @@ const Dashboard: React.FC<DashboardProps> = ({
                           </span>
                         </td>
                         <td className="px-6 py-5">
-                          <button onClick={(e) => { e.stopPropagation(); persistQuotes(savedQuotes.filter(x => x.id !== q.id)); }} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const serverId = (q as any).serverProjId;
+                              if (serverId != null) {
+                                void (async () => {
+                                  try {
+                                    await deleteQuotationProject(serverId);
+                                    showToast('Project deleted from server.', 'success');
+                                  } catch (err: any) {
+                                    showToast(`Server delete failed: ${err?.message || 'Server error'}`, 'error');
+                                  }
+                                })();
+                              }
+                              persistQuotes(savedQuotes.filter((x) => x.id !== q.id));
+                            }}
+                            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                          >
                             <Trash2 size={18} /> 
                           </button>
                         </td>

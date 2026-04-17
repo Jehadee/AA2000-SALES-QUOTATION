@@ -32,6 +32,8 @@ export type SaveQuotationProjectPayload = {
   manpowerIds?: (string | number)[];
   activity?: string | null;
   objective?: string | null;
+  /** Optional: mapped by backend to current_balance. */
+  amount?: number;
 };
 
 export type AccountProjectsResponseRow = {
@@ -44,6 +46,8 @@ export type AccountProjectsResponseRow = {
   Status?: string | null;
   activity?: string | null;
   objective?: string | null;
+  /** Monetary total stored in DB (your backend maps this from `amount` into `current_balance`). */
+  current_balance?: number | string | null;
   customerFullName?: string | null;
   Customer?: {
     cus_ID?: string | number;
@@ -197,6 +201,21 @@ function getProjectsByAccountUrl(accountId: string): string {
   return `${baseClean}/service/quotation/get/projects/account/${encodeURIComponent(accountId)}`;
 }
 
+function getDeleteQuotationProjectUrl(projectId: string | number): string {
+  const base = getNormalizedApiBaseUrl();
+  const override = (import.meta as any).env?.VITE_DELETE_QUOTATION_PROJECT_PATH as string | undefined;
+  const baseClean = base.replace(/\/+$/, '');
+  const id = encodeURIComponent(String(projectId));
+  if (override && override.trim()) {
+    const tpl = override.trim();
+    const withId = tpl.includes('{id}') ? tpl.replace('{id}', id) : `${tpl.replace(/\/+$/, '')}/${id}`;
+    const p = withId.startsWith('/') ? withId : `/${withId}`;
+    return `${baseClean}${p}`;
+  }
+  // Router is mounted under /service/quotation/delete and route is /delete/quotation/:id
+  return `${baseClean}/service/quotation/delete/delete/quotation/${id}`;
+}
+
 function getSaveProjectDetailsUrl(): string {
   const base = getNormalizedApiBaseUrl();
   const override = (import.meta as any).env?.VITE_SAVE_PROJECT_DETAILS_PATH as string | undefined;
@@ -266,6 +285,19 @@ export async function fetchProjectsByAccount(accountId: string): Promise<Account
 
   const rows = (data as any)?.data;
   return Array.isArray(rows) ? (rows as AccountProjectsResponseRow[]) : [];
+}
+
+export async function deleteQuotationProject(projectId: string | number): Promise<void> {
+  const url = getDeleteQuotationProjectUrl(projectId);
+  const res = await fetch(url, { method: 'DELETE', headers: { Accept: 'application/json' } });
+  const contentType = res.headers.get('content-type') || '';
+  const isJson = contentType.includes('application/json');
+  const data = isJson ? await res.json() : await res.text();
+  if (!res.ok) {
+    const msg =
+      typeof data === 'string' ? data : (data as any)?.message || `Delete project failed (${res.status})`;
+    throw new Error(msg);
+  }
 }
 
 /**

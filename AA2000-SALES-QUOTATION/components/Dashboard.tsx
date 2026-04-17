@@ -19,6 +19,7 @@ import { fetchProducts } from '../services/productsApi';
 import { deriveTierPricesFromBasePrice } from '../services/pricing';
 import * as XLSX from 'xlsx';
 import { fetchAllyOpportunities } from '../services/allyOpportunitiesApi';
+import { deleteQuotationProject } from '../../services/quotationFileApi';
 import {
   compactCustomerPatch,
   matchProductFromCatalog,
@@ -1044,7 +1045,24 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                           </span>
                         </td>
                         <td className="px-6 py-5">
-                          <button onClick={(e) => { e.stopPropagation(); persistQuotes(savedQuotes.filter(x => x.id !== q.id)); }} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const serverId = (q as any).serverProjId;
+                              if (serverId != null) {
+                                void (async () => {
+                                  try {
+                                    await deleteQuotationProject(serverId);
+                                    showToast('Project deleted from server.', 'success');
+                                  } catch (err: any) {
+                                    showToast(`Server delete failed: ${err?.message || 'Server error'}`, 'error');
+                                  }
+                                })();
+                              }
+                              persistQuotes(savedQuotes.filter((x) => x.id !== q.id));
+                            }}
+                            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                          >
                             <Trash2 size={18} /> 
                           </button>
                         </td>

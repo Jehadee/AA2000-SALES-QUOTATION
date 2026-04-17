@@ -32,7 +32,6 @@ import ExcelImporter from './ExcelImporter';
 import AIChat from './AIChat';
 import { sendQuotationEmail } from '../services/emailService';
 import { blobToBase64, generateQuotationPDF } from '../services/pdfService';
-import { addCustomer, extractCustomerIdFromAddResponse } from '../services/customerApi';
 import {
   fetchProjectsByAccount,
   type AccountProjectsResponseRow,
@@ -155,6 +154,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const [isFormValid, setIsFormValid] = useState(false);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' | 'info' } | null>(null);
+  const [selectedExistingCustomerId, setSelectedExistingCustomerId] = useState<string | null>(null);
   const [savedQuotes, setSavedQuotes] = useState<QuotationRecord[]>([]);
   const savedQuotesRef = useRef<QuotationRecord[]>([]);
   const [dynamicProducts, setDynamicProducts] = useState<Product[]>([]);
@@ -995,14 +995,8 @@ const Dashboard: React.FC<DashboardProps> = ({
       return;
     }
 
-    let customerBackendId: string | undefined;
-    try {
-      const addRes = await addCustomer(customer);
-      customerBackendId = extractCustomerIdFromAddResponse(addRes);
-    } catch (e: any) {
-      showToast(`Submit failed: ${e?.message || 'Could not reach server'}`, 'error');
-      return;
-    }
+    // Do NOT auto-create customer on submit; only use an existing selected customer id if present.
+    const customerBackendId: string | undefined = selectedExistingCustomerId || undefined;
 
     const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
     const laborCost = customer.hasLabor ? (customer.laborCost || 0) : 0;
@@ -1081,6 +1075,7 @@ const Dashboard: React.FC<DashboardProps> = ({
     showToast('Quote submitted. Customer saved; quotation added to pipeline. PDF sync runs in the background.');
     setItems([]);
     setUploadedFiles([]);
+    setSelectedExistingCustomerId(null);
     setLaborServices([]);
     setCustomer(clearedCustomer);
     setPaymentMethod(PaymentMethod.BANK_TRANSFER);
@@ -1299,7 +1294,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           pdfTemplateSnapshot: JSON.parse(JSON.stringify(pdfTemplate)) as PDFTemplate,
         };
         persistQuotes([newQuote, ...savedQuotes]);
-        setItems([]); setUploadedFiles([]); setCustomer(INITIAL_CUSTOMER);
+        setItems([]); setUploadedFiles([]); setCustomer(INITIAL_CUSTOMER); setSelectedExistingCustomerId(null);
         showToast('Email sent and quote saved to Follow-up.');
       }
       setIsPreviewOpen(false);
@@ -1741,7 +1736,12 @@ const Dashboard: React.FC<DashboardProps> = ({
                         <h3 className="text-xl font-black text-slate-900">Recipient Details</h3>
                       </div>
                       <div className="p-8">
-                        <CustomerForm customer={customer} setCustomer={setCustomer} onValidationChange={setIsFormValid} />
+                        <CustomerForm
+                          customer={customer}
+                          setCustomer={setCustomer}
+                          onValidationChange={setIsFormValid}
+                          onExistingCustomerSelect={setSelectedExistingCustomerId}
+                        />
                       </div>
                     </div>
 
@@ -1815,7 +1815,12 @@ const Dashboard: React.FC<DashboardProps> = ({
                       <h3 className="text-xl font-black text-slate-900">Client Details</h3>
                    </div>
                    <div className="p-8">
-                      <CustomerForm customer={customer} setCustomer={setCustomer} onValidationChange={setIsFormValid} />
+                      <CustomerForm
+                        customer={customer}
+                        setCustomer={setCustomer}
+                        onValidationChange={setIsFormValid}
+                        onExistingCustomerSelect={setSelectedExistingCustomerId}
+                      />
                    </div>
                 </div>
 

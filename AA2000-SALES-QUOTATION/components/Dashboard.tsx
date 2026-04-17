@@ -15,7 +15,6 @@ import ExcelImporter from './ExcelImporter';
 import AIChat from './AIChat';
 import { sendQuotationEmail } from '../services/emailService';
 import { blobToBase64 } from '../services/pdfService';
-import { addCustomer } from '../services/customerApi';
 import { fetchProducts } from '../services/productsApi';
 import { deriveTierPricesFromBasePrice } from '../services/pricing';
 import * as XLSX from 'xlsx';
@@ -66,6 +65,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
 
   const [isFormValid, setIsFormValid] = useState(false);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' | 'info' } | null>(null);
+  const [selectedExistingCustomerId, setSelectedExistingCustomerId] = useState<string | null>(null);
   const [savedQuotes, setSavedQuotes] = useState<QuotationRecord[]>([]);
   const savedQuotesRef = useRef<QuotationRecord[]>([]);
   const [dynamicProducts, setDynamicProducts] = useState<Product[]>([]);
@@ -629,12 +629,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
   const handleSubmitPipeline = async () => {
     if (!isFormValid || items.length === 0) return;
 
-    try {
-      await addCustomer(customer);
-    } catch (e: any) {
-      showToast(`Submit failed: ${e?.message || 'Could not reach server'}`, 'error');
-      return;
-    }
+    // Intentionally skip add-customer API on submit to avoid duplicate customer creation.
 
     const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
     const laborCost = customer.hasLabor ? (customer.laborCost || 0) : 0;
@@ -660,7 +655,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
     };
     await persistQuotes([newQuote, ...savedQuotes]);
     showToast('Quote submitted. Customer saved to backend; quotation saved to pipeline.');
-    setItems([]); setUploadedFiles([]); setCustomer(INITIAL_CUSTOMER);
+    setItems([]); setUploadedFiles([]); setCustomer(INITIAL_CUSTOMER); setSelectedExistingCustomerId(null);
     setDiscountValue(0); setDiscountType('percentage'); setCurrentStatus(QuotationStatus.INQUIRY); setActiveTab('pipeline');
   };
 
@@ -745,7 +740,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
           attachments: [], version: 1
         };
         persistQuotes([newQuote, ...savedQuotes]);
-        setItems([]); setUploadedFiles([]); setCustomer(INITIAL_CUSTOMER);
+        setItems([]); setUploadedFiles([]); setCustomer(INITIAL_CUSTOMER); setSelectedExistingCustomerId(null);
         showToast('Email sent and quote saved to Follow-up.');
       }
       setIsPreviewOpen(false);
@@ -930,7 +925,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout, userRole }) => {
                       <h3 className="text-xl font-black text-slate-900">Client Details</h3>
                    </div>
                    <div className="p-8">
-                      <CustomerForm customer={customer} setCustomer={setCustomer} onValidationChange={setIsFormValid} />
+                      <CustomerForm
+                        customer={customer}
+                        setCustomer={setCustomer}
+                        onValidationChange={setIsFormValid}
+                        onExistingCustomerSelect={setSelectedExistingCustomerId}
+                      />
                    </div>
                 </div>
 

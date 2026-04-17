@@ -13,9 +13,11 @@ interface Props {
   customer: CustomerInfo;
   setCustomer: React.Dispatch<React.SetStateAction<CustomerInfo>>;
   onValidationChange: (isValid: boolean) => void;
+  /** Emits selected existing customer id; `null` means manual entry mode. */
+  onExistingCustomerSelect?: (customerId: string | null) => void;
 }
 
-const CustomerForm: React.FC<Props> = React.memo(({ customer, setCustomer, onValidationChange }) => {
+const CustomerForm: React.FC<Props> = React.memo(({ customer, setCustomer, onValidationChange, onExistingCustomerSelect }) => {
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const [location, setLocation] = useState<LatLon | null>(null);
   const [locLoading, setLocLoading] = useState(false);
@@ -74,6 +76,8 @@ const CustomerForm: React.FC<Props> = React.memo(({ customer, setCustomer, onVal
   }, []);
 
   const handleChange = (field: keyof CustomerInfo, value: any) => {
+    // Manual edits switch form back to "new customer" mode.
+    onExistingCustomerSelect?.(null);
     setCustomer(prev => {
       const next = { ...prev, [field]: value };
       if (field === 'fname' || field === 'mname' || field === 'lname') {
@@ -189,6 +193,7 @@ const CustomerForm: React.FC<Props> = React.memo(({ customer, setCustomer, onVal
     .slice(0, 8);
 
   const applyCustomerSelection = (entry: CustomerDirectoryItem) => {
+    onExistingCustomerSelect?.(String(entry.id));
     setCustomer((prev) => ({
       ...prev,
       fname: entry.fname || prev.fname,
